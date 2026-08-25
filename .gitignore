@@ -1,0 +1,5 @@
+.agents/.secrets/
+.agents/.workspaces/
+.agents/.artifacts/
+.env
+.mcp.json

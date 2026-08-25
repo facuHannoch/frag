@@ -1,0 +1,112 @@
+name: 6-ipa-coach
+
+# Default values inherited by every agent unless overridden.
+defaults:
+  harness: claude        # claude | codex | gemini | copilot | kimi | minimax | opencode
+  runtime: host          # host | docker
+  toolchain: null        # docker image toolchain, e.g. nodepy
+  image: null            # explicit docker image override
+  workspace:
+    environment: filesystem  # filesystem | docker | vm
+    mode: worktree           # worktree | clone | self | none
+    git:
+      branch: null           # explicit branch override
+      repository: null       # clone a different repo; null = current repo
+      submodules: []         # submodule paths to init
+    on_provision: null       # shell script run once after workspace creation
+  on_start: []             # commands run every time the runtime starts
+  session_prompt: null
+  mcp_groups: []
+  skill_groups: []
+  skills: []
+  idle_timeout_ms: null
+  default_permission: approve
+  transcript_activity: true
+
+
+server:
+  port: 34390
+  hub_url: null
+  public_allow_cidrs: 
+    - 100.64.0.0/10
+  tiers:
+    chat_read: public
+    chat_write: public
+    reads: public
+    lifecycle: public
+    resources_read: public
+    resources_write: public
+    terminal: public
+  voice_notes: azure-stt
+
+capabilities:
+  demo-speak:
+    type: speak
+    description: >
+      Test adapter. Returns a canned wav. Use for wiring checks only.
+    provider:
+      endpoint: http://localhost:0
+      api: test
+      model: test
+
+  azure-tts:
+    type: speak
+    description: >
+      Text-to-speech. Use for any request to read something aloud,
+      narrate, or produce spoken audio.
+    provider:
+      endpoint: https://$AZURE_SPEECH_REGION.tts.speech.microsoft.com/cognitiveservices/v1
+      api: azure-speech
+      model: default
+      api_key: $AZURE_SPEECH_KEY
+    params:
+      voice: { type: string, default: en-US-JennyMultilingualNeural }
+      
+  azure-stt:
+    type: transcribe
+    description: >
+      Transcription. Use for any request to convert speech or audio to text.
+    provider:
+      endpoint: https://eastus.stt.speech.microsoft.com
+      api: azure-speech
+      model: default
+      api_key: $AZURE_SPEECH_KEY
+  
+  seedream-4_5:
+    type: generate_image
+    description: >
+      Image generation. Use for any request to generate images from text prompts.
+    provider: 
+      endpoint: https://openrouter.ai/api/v1
+      api_key: $OPENROUTER_API_KEY
+      api: openrouter
+      model: bytedance-seed/seedream-4.5
+      
+  seedance-2_0-mini:
+    type: generate_video
+    description: >
+      Video generation. Use for any request to generate videos from text prompts.
+    provider: 
+      endpoint: https://openrouter.ai/api/v1
+      api_key: $OPENROUTER_API_KEY
+      api: openrouter
+      model: bytedance/seedance-2.0-mini
+
+
+task_policy:
+  on_completion: retired   # retired | not-provisioned | provisioned | started
+  agent_config:
+    harness:
+      name: codex
+      model: luna
+    runtime: host
+    workspace:
+      environment: filesystem
+      mode: worktree
+    # Task agents retire and their transcript is usually archived unread, which
+    # is most of the disk cost for least of the value. Flip to true when you need
+    # to debug what an unattended task agent actually did — nobody watched it live.
+    transcript_activity: false
+
+agents:
+  atlas: null

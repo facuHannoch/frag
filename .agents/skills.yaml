@@ -1,0 +1,21 @@
+# .agents/skills.yaml — Skills configuration
+#
+# Top-level keys are group names. The special "skills" group is applied to every
+# agent automatically. Other groups are opt-in via skill_groups in agents.yaml.
+#
+# A global config at ~/.agents/skills.yaml is merged first; project entries
+# override global entries with the same name within the same group.
+#
+# Two entry types:
+#   source: local  — skill already installed in .agents/skills/<name>/
+#   install: "..."  — shell command that installs the skill
+
+# skills:
+#   roll-dice:
+#     source: local
+
+# web-tools:
+#   playwright:
+#     install: "npx @playwright/mcp@latest skills add"
+
+skills: {}

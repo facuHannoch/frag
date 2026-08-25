@@ -1,0 +1,23 @@
+# .agents/mcp.yaml — MCP server configuration
+#
+# Top-level keys are group names. The special "servers" group is applied to every
+# agent automatically. Other groups are opt-in via mcp_groups in agents.yaml.
+#
+# A global config at ~/.agents/mcp.yaml is merged first; project entries
+# override global entries with the same name within the same group.
+#
+# Secrets: use $VAR_NAME — expanded from environment variables at load time.
+# Put sensitive values in .secrets/common/.env (Bun loads .env automatically).
+#
+# Transport types:
+#   stdio — subprocess spawned by the harness
+#   http  — streamable HTTP (MCP 2025-03-26+)
+#   sse   — legacy HTTP+SSE transport
+
+# servers:
+#   filesystem:
+#     type: stdio
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+servers: {}

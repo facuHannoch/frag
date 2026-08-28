@@ -1,8 +1,9 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+
+import Database, { type Statement } from "better-sqlite3";
 
 import { ConfigurationError, MirrorConfigurationCycleError } from "./errors.js";
 import type { ApiStyle, TokenCounterKind } from "./types.js";
@@ -203,11 +204,11 @@ function numberColumn(row: SqlRow, name: string): number {
   return value;
 }
 
-function rows(statement: StatementSync, ...values: (string | number | null)[]): SqlRow[] {
+function rows(statement: Statement, ...values: (string | number | null)[]): SqlRow[] {
   return statement.all(...values) as SqlRow[];
 }
 
-function migrate(database: DatabaseSync): void {
+function migrate(database: Database.Database): void {
   const current = numberColumn(database.prepare("PRAGMA user_version").get() as SqlRow, "user_version");
   if (current > SCHEMA_VERSION) {
     throw new ConfigurationError(
@@ -287,7 +288,7 @@ function migrate(database: DatabaseSync): void {
   }
 }
 
-function runTransaction<T>(database: DatabaseSync, operation: () => T): T {
+function runTransaction<T>(database: Database.Database, operation: () => T): T {
   database.exec("BEGIN IMMEDIATE");
   try {
     const value = operation();
@@ -355,11 +356,11 @@ function databaseFromRow(row: SqlRow): DatabaseRecord {
 
 export class FragControlPlane {
   readonly path: string;
-  readonly #database: DatabaseSync;
+  readonly #database: Database.Database;
 
   constructor(path: string) {
     this.path = path;
-    this.#database = new DatabaseSync(path);
+    this.#database = new Database(path);
     this.#database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     migrate(this.#database);
   }

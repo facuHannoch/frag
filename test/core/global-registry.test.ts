@@ -3,7 +3,8 @@ import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { DatabaseSync } from "node:sqlite";
+
+import Database from "better-sqlite3";
 
 import {
   ConfigurationError,
@@ -212,7 +213,7 @@ test("converts global records into runtime config without environment-backed man
   assert.equal(resolveConfiguredEnvironment(config, {}).databaseUrls.get("managed:local"), database.connectionUrl);
   frag.close();
 
-  const sqlite = new DatabaseSync(registryPath, { readOnly: true });
+  const sqlite = new Database(registryPath, { readonly: true });
   assert.equal((sqlite.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
   sqlite.close();
 });
@@ -248,7 +249,7 @@ test("migrates a v1 registry transactionally on open", async () => {
   const registryPath = join(directory, "registry.sqlite3");
   const initial = await openFrag({ registryPath });
   initial.close();
-  const old = new DatabaseSync(registryPath);
+  const old = new Database(registryPath);
   old.exec("ALTER TABLE embedders DROP COLUMN request_model; PRAGMA user_version = 1;");
   old.close();
 

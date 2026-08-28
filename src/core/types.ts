@@ -88,6 +88,52 @@ export interface SourceSnapshot {
   readonly rowVersion: bigint | null;
 }
 
+export interface NewSource {
+  readonly collection: string;
+  readonly sourceKey: string;
+  readonly content: string;
+  readonly contentHash: string;
+  readonly representationHash: string;
+  readonly metadataHash: string;
+  readonly embeddingFingerprint: string;
+  readonly embeddingDim: number;
+  readonly chunkingMode: ChunkingMode;
+  readonly chunkSize: number | null;
+  readonly metadata: Metadata;
+  readonly origin: SourceOrigin | null;
+}
+
+export interface RepresentationUpdate {
+  readonly content: string;
+  readonly contentHash: string;
+  readonly representationHash: string;
+  readonly metadataHash: string;
+  readonly embeddingFingerprint: string;
+  readonly embeddingDim: number;
+  readonly chunkingMode: ChunkingMode;
+  readonly chunkSize: number | null;
+  readonly metadata: Metadata;
+}
+
+export interface VectorSearchResult {
+  readonly sourceKey: string;
+  readonly content: string;
+  readonly score: number;
+  readonly chunkIndex: number;
+  readonly chunkCount: number;
+  readonly metadata: Metadata;
+}
+
+export interface StateReceipt {
+  readonly sourceCollection: string;
+  readonly sourceKey: string;
+  readonly targetCollection: string;
+  readonly targetSourceKey: string;
+  readonly operation: Operation;
+  readonly ref: string;
+  readonly createdAt: Date;
+}
+
 export interface WriteResult {
   readonly source_id: number;
   readonly chunks_inserted: number;

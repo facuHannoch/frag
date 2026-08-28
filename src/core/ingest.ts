@@ -17,7 +17,7 @@ import type {
   TokenCounter,
   WriteResult,
 } from "./types.js";
-import { DimensionMismatchError } from "./errors.js";
+import { assertCollectionDimension } from "./collection-status.js";
 
 export interface MirrorIngestEvent {
   readonly source: Source;
@@ -288,17 +288,11 @@ export class IngestService {
   }
 
   async #assertDimensionValid(): Promise<void> {
-    const dimensions = await this.#dependencies.sourceStore.listDimensions(
+    await assertCollectionDimension(
       this.#dependencies.collection.name,
+      this.#dependencies.embedderConfig,
+      this.#dependencies.sourceStore,
     );
-    const mismatched = dimensions.filter((dim) => dim !== this.#dependencies.embedderConfig.dim);
-    if (mismatched.length > 0) {
-      throw new DimensionMismatchError(
-        this.#dependencies.collection.name,
-        this.#dependencies.embedderConfig.dim,
-        dimensions,
-      );
-    }
   }
 
   async #lockAndRevalidate(tx: Tx, sourceKey: string, initial: SourceSnapshot): Promise<void> {

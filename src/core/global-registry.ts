@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ConfigurationError, MirrorConfigurationCycleError } from "./errors.js";
 import type { ApiStyle, TokenCounterKind } from "./types.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export type EmbedderProviderKind = "lmstudio" | "openai-compatible" | "azure-openai";
 export type DatabaseKind = "managed-postgres" | "existing-postgres";
@@ -20,6 +20,7 @@ export interface EmbedderRegistration {
   readonly baseUrl?: string;
   readonly baseUrlEnv?: string;
   readonly model: string;
+  readonly requestModel?: string;
   readonly revision: string;
   readonly dim: number;
   readonly maxTokens: number;
@@ -211,7 +212,7 @@ function migrate(database: DatabaseSync): void {
   if (current === SCHEMA_VERSION) return;
   database.exec("BEGIN IMMEDIATE");
   try {
-    database.exec(`
+    if (current < 1) database.exec(`
       CREATE TABLE embedders (
         id TEXT PRIMARY KEY,
         provider_kind TEXT NOT NULL CHECK (provider_kind IN ('lmstudio','openai-compatible','azure-openai')),
@@ -219,6 +220,7 @@ function migrate(database: DatabaseSync): void {
         base_url TEXT,
         base_url_env TEXT,
         model TEXT NOT NULL,
+        request_model TEXT,
         revision TEXT NOT NULL,
         dim INTEGER NOT NULL CHECK (dim > 0),
         max_tokens INTEGER NOT NULL CHECK (max_tokens > 0),
@@ -270,8 +272,9 @@ function migrate(database: DatabaseSync): void {
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
-      PRAGMA user_version = 1;
     `);
+    if (current === 1) database.exec("ALTER TABLE embedders ADD COLUMN request_model TEXT");
+    database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -300,6 +303,9 @@ function embedderFromRow(row: SqlRow): EmbedderRecord {
     ...(nullableStringColumn(row, "base_url") === undefined ? {} : { baseUrl: stringColumn(row, "base_url") }),
     ...(nullableStringColumn(row, "base_url_env") === undefined ? {} : { baseUrlEnv: stringColumn(row, "base_url_env") }),
     model: stringColumn(row, "model"),
+    ...(nullableStringColumn(row, "request_model") === undefined
+      ? {}
+      : { requestModel: stringColumn(row, "request_model") }),
     revision: stringColumn(row, "revision"),
     dim: numberColumn(row, "dim"),
     maxTokens: numberColumn(row, "max_tokens"),
@@ -506,24 +512,46 @@ export class FragControlPlane {
     validateEmbedder(input);
     const existing = this.embedders.get(input.id);
     if (existing !== null) {
-      const comparable = ({ createdAt: _created, updatedAt: _updated, lastHealthCheck: _health, ...rest }: EmbedderRecord) => rest;
-      const { lastHealthCheck: _inputHealth, ...registration } = input;
+      const comparable = ({
+        createdAt: _created,
+        updatedAt: _updated,
+        lastHealthCheck: _health,
+        requestModel: _requestModel,
+        baseUrl: _baseUrl,
+        ...rest
+      }: EmbedderRecord) => rest;
+      const {
+        lastHealthCheck: _inputHealth,
+        requestModel: _inputRequestModel,
+        baseUrl: _inputBaseUrl,
+        ...registration
+      } = input;
       if (!isDeepStrictEqual(comparable(existing), registration)) {
         throw new ConfigurationError(`Embedder ${input.id} already exists with different settings`);
       }
-      if (input.lastHealthCheck !== undefined) this.embedders.updateHealth(input.id, input.lastHealthCheck);
+      this.#database.prepare(`
+        UPDATE embedders
+        SET base_url = ?, request_model = ?, last_health_check = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        input.baseUrl ?? null,
+        input.requestModel ?? null,
+        input.lastHealthCheck ?? existing.lastHealthCheck ?? null,
+        new Date().toISOString(),
+        input.id,
+      );
       return;
     }
     const now = new Date().toISOString();
     this.#database.prepare(`
       INSERT INTO embedders (
-        id, provider_kind, api_style, base_url, base_url_env, model, revision, dim,
+        id, provider_kind, api_style, base_url, base_url_env, model, request_model, revision, dim,
         max_tokens, recommended_chunk_size, token_counter, token_safety_margin,
         api_key_env, managed, limits_inferred, last_health_check, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.id, input.providerKind, input.apiStyle, input.baseUrl ?? null,
-      input.baseUrlEnv ?? null, input.model, input.revision, input.dim, input.maxTokens,
+      input.baseUrlEnv ?? null, input.model, input.requestModel ?? null, input.revision, input.dim, input.maxTokens,
       input.recommendedChunkSize, input.tokenCounter, input.tokenSafetyMargin ?? null,
       input.apiKeyEnv, input.managed ? 1 : 0, input.limitsInferred ? 1 : 0,
       input.lastHealthCheck ?? null, now, now,
@@ -534,12 +562,29 @@ export class FragControlPlane {
     validateDatabase(input);
     const existing = this.databases.get(input.id);
     if (existing !== null) {
-      const comparable = ({ createdAt: _created, updatedAt: _updated, lastHealthCheck: _health, ...rest }: DatabaseRecord) => rest;
-      const { lastHealthCheck: _inputHealth, ...registration } = input;
+      const comparable = ({
+        createdAt: _created,
+        updatedAt: _updated,
+        lastHealthCheck: _health,
+        connectionUrl: _connectionUrl,
+        ...rest
+      }: DatabaseRecord) => rest;
+      const {
+        lastHealthCheck: _inputHealth,
+        connectionUrl: _inputConnectionUrl,
+        ...registration
+      } = input;
       if (!isDeepStrictEqual(comparable(existing), registration)) {
         throw new ConfigurationError(`Database ${input.id} already exists with different settings`);
       }
-      if (input.lastHealthCheck !== undefined) this.databases.updateHealth(input.id, input.lastHealthCheck);
+      this.#database.prepare(`
+        UPDATE databases SET connection_url = ?, last_health_check = ?, updated_at = ? WHERE id = ?
+      `).run(
+        input.connectionUrl ?? null,
+        input.lastHealthCheck ?? existing.lastHealthCheck ?? null,
+        new Date().toISOString(),
+        input.id,
+      );
       return;
     }
     const now = new Date().toISOString();

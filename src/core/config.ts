@@ -245,7 +245,13 @@ export function resolveConfiguredEnvironment(
   };
   const databaseUrls = new Map<string, string>();
   for (const database of config.dbs.values()) {
-    databaseUrls.set(database.name, required(database.urlEnv, `database ${database.name}`));
+    if ((database.url === undefined) === (database.urlEnv === undefined)) {
+      throw new ConfigurationError(`database ${database.name} must define exactly one URL source`);
+    }
+    databaseUrls.set(
+      database.name,
+      database.url ?? required(database.urlEnv!, `database ${database.name}`),
+    );
   }
   const embedderBaseUrls = new Map<string, string>();
   const embedderApiKeys = new Map<string, string | null>();

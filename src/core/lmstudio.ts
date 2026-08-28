@@ -265,7 +265,8 @@ export class LMStudioService {
           providerKind: "lmstudio",
           apiStyle: "openai",
           baseUrl,
-          model: effectiveIdentifier,
+          model: modelKey,
+          requestModel: effectiveIdentifier,
           revision: "1",
           dim: dimension,
           maxTokens,
@@ -279,13 +280,25 @@ export class LMStudioService {
         },
       };
     } catch (error) {
-      await this.#cleanup(identifier, loadedByFrag, startedServer);
+      const cleanupFailures = await this.#cleanup(identifier, loadedByFrag, startedServer);
+      if (cleanupFailures.length > 0) {
+        throw new ConfigurationError(
+          `LM Studio setup failed and cleanup was incomplete for ${cleanupFailures.join(", ")}`,
+          { cleanupFailures },
+          { cause: error },
+        );
+      }
       throw error;
     }
   }
 
   async release(ready: LMStudioReadyModel): Promise<void> {
-    await this.#cleanup(ready.identifier, ready.loadedByFrag, ready.startedServer);
+    const failures = await this.#cleanup(ready.identifier, ready.loadedByFrag, ready.startedServer);
+    if (failures.length > 0) {
+      throw new ConfigurationError(`Could not clean up LM Studio resources: ${failures.join(", ")}`, {
+        failures,
+      });
+    }
   }
 
   async #startServer(): Promise<boolean> {
@@ -333,12 +346,22 @@ export class LMStudioService {
     return embedding.length;
   }
 
-  async #cleanup(identifier: string, loadedByFrag: boolean, startedServer: boolean): Promise<void> {
+  async #cleanup(identifier: string, loadedByFrag: boolean, startedServer: boolean): Promise<string[]> {
+    const failures: string[] = [];
+    const attempt = async (resource: string, arguments_: readonly string[]): Promise<void> => {
+      try {
+        const result = await this.#runner.run(this.#executable, arguments_);
+        if (result.exitCode !== 0) failures.push(resource);
+      } catch {
+        failures.push(resource);
+      }
+    };
     if (loadedByFrag) {
-      await this.#runner.run(this.#executable, ["unload", identifier]).catch(() => undefined);
+      await attempt(`model ${identifier}`, ["unload", identifier]);
     }
     if (startedServer) {
-      await this.#runner.run(this.#executable, ["server", "stop"]).catch(() => undefined);
+      await attempt("LM Studio server", ["server", "stop"]);
     }
+    return failures;
   }
 }

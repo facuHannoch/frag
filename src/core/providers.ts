@@ -68,7 +68,7 @@ export class OpenAICompatibleEmbedder implements Embedder {
     const response = await fetch(this.#url, {
       method: "POST",
       headers: { "content-type": "application/json", ...this.#headers },
-      body: JSON.stringify({ input: texts, model: this.config.model }),
+      body: JSON.stringify({ input: texts, model: this.config.requestModel ?? this.config.model }),
     });
     const body = (await response.json().catch(() => ({}))) as {
       data?: Array<{ index?: number; embedding?: number[] }>;

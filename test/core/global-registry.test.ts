@@ -3,11 +3,14 @@ import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   ConfigurationError,
   MirrorConfigurationCycleError,
+  configFromControlPlane,
   openFrag,
+  resolveConfiguredEnvironment,
   resolveFragHome,
   type DatabaseRegistration,
   type EmbedderRegistration,
@@ -189,4 +192,68 @@ test("validates resource secret boundaries and keeps journals out of systems", a
   frag.provisioning.remove("attempt-1");
   assert.equal(frag.provisioning.list().length, 0);
   frag.close();
+});
+
+test("converts global records into runtime config without environment-backed managed secrets", async () => {
+  const directory = await temporaryDirectory();
+  const registryPath = join(directory, "registry.sqlite3");
+  const frag = await openFrag({ registryPath });
+  frag.systems.create({
+    name: "notes",
+    description: "Working notes",
+    embedder: { ...embedder, model: "nomic-canonical", requestModel: "loaded-instance" },
+    database,
+  });
+  const config = configFromControlPlane(frag);
+  assert.equal(config.collections.get("notes")?.embedder, "lmstudio:nomic");
+  assert.equal(config.embedders.get("lmstudio:nomic")?.model, "nomic-canonical");
+  assert.equal(config.embedders.get("lmstudio:nomic")?.requestModel, "loaded-instance");
+  assert.equal(config.dbs.get("managed:local")?.url, database.connectionUrl);
+  assert.equal(resolveConfiguredEnvironment(config, {}).databaseUrls.get("managed:local"), database.connectionUrl);
+  frag.close();
+
+  const sqlite = new DatabaseSync(registryPath, { readOnly: true });
+  assert.equal((sqlite.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
+  sqlite.close();
+});
+
+test("refreshes mutable local endpoints without changing canonical resource identity", async () => {
+  const directory = await temporaryDirectory();
+  const frag = await openFrag({ registryPath: join(directory, "registry.sqlite3") });
+  frag.systems.create({ name: "one", description: "One", embedder, database });
+  frag.systems.create({
+    name: "two",
+    description: "Two",
+    embedder: {
+      ...embedder,
+      baseUrl: "http://127.0.0.1:4321/v1",
+      requestModel: "new-loaded-instance",
+      lastHealthCheck: "2026-08-28T01:00:00.000Z",
+    },
+    database: {
+      ...database,
+      connectionUrl: "postgres://frag:secret@127.0.0.1:54330/frag",
+      lastHealthCheck: "2026-08-28T01:00:00.000Z",
+    },
+  });
+  assert.equal(frag.embedders.get(embedder.id)?.model, embedder.model);
+  assert.equal(frag.embedders.get(embedder.id)?.requestModel, "new-loaded-instance");
+  assert.equal(frag.embedders.get(embedder.id)?.baseUrl, "http://127.0.0.1:4321/v1");
+  assert.match(frag.databases.get(database.id)?.connectionUrl ?? "", /:54330\/frag$/u);
+  frag.close();
+});
+
+test("migrates a v1 registry transactionally on open", async () => {
+  const directory = await temporaryDirectory();
+  const registryPath = join(directory, "registry.sqlite3");
+  const initial = await openFrag({ registryPath });
+  initial.close();
+  const old = new DatabaseSync(registryPath);
+  old.exec("ALTER TABLE embedders DROP COLUMN request_model; PRAGMA user_version = 1;");
+  old.close();
+
+  const migrated = await openFrag({ registryPath });
+  migrated.embedders.register({ ...embedder, requestModel: "runtime-id" });
+  assert.equal(migrated.embedders.get(embedder.id)?.requestModel, "runtime-id");
+  migrated.close();
 });

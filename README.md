@@ -15,21 +15,26 @@ npm test
 npm run build
 ```
 
-Node 22 or newer, PostgreSQL with pgvector, and an OpenAI-compatible embedding
-endpoint are required for standalone operation.
+Node 22.5 or newer is required. The simplest local path uses LM Studio plus
+Docker or Podman; Frag provisions PostgreSQL with pgvector itself.
 
-## Configuration
+## First system
 
-Copy `frag.example.yaml` and set the database environment variable named by
-`url_env`. Configuration stores environment variable names, never secrets.
+There is no required YAML file and Frag does not inspect the working directory
+for one. Run:
 
 ```sh
-cp frag.example.yaml frag.yaml
-export LOCAL_DATABASE_URL=postgres://localhost/frag
+frag add
 ```
 
-Schema bootstrap runs on every application startup. `frag add` edits the shared
-registry; with no flags it opens a human-only prompt.
+The three-step wizard lets you search downloaded LM Studio embedding models,
+choose managed local PostgreSQL (the default) or an existing server, and name
+and describe the system with optional mirroring. It verifies the model,
+database, pgvector, and schema before the system becomes visible.
+
+Systems live in Frag's platform application-data directory. `FRAG_HOME` can
+override that location for a deliberate separate profile. YAML is reserved for
+explicit import/export rather than normal startup.
 
 ## CLI
 
@@ -43,7 +48,7 @@ frag serve --collections local-notes
 frag mcp --collections local-notes
 ```
 
-Only CLI `put` and `search` use the locally configured default collection.
+Only CLI `put` and `search` use the globally configured default system.
 Library, HTTP, and MCP calls always require an explicit collection.
 
 The HTTP surface is:
@@ -57,15 +62,27 @@ The MCP surface exposes exactly `ingest`, `search`, and `list_collections`.
 ## Library
 
 ```js
-import { loadFragApplication } from "frag/core";
+import {
+  SystemProvisioner,
+  createFragApplicationFromControlPlane,
+  openFrag,
+} from "frag/core";
 
-const app = await loadFragApplication("frag.yaml", {
-  allowedCollections: ["public-docs"],
+const frag = await openFrag();
+await new SystemProvisioner(frag).create({
+  name: "public-docs",
+  description: "Curated public documentation",
+  lmStudioModelKey: "text-embedding-nomic-embed-text-v1.5",
+  database: { kind: "managed-postgres" },
 });
 
+const app = await createFragApplicationFromControlPlane(frag, {
+  allowedCollections: ["public-docs"],
+});
 const collections = app.registry.listCollections();
 const response = await app.registry.search("public-docs", "installation steps");
 await app.close();
+frag.close();
 ```
 
 The allow-list describes what that registry instance exposes. It is coarse

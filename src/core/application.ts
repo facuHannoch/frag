@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { EstimateTokenCounter } from "./chunking.js";
 import { parseFragConfig, resolveConfiguredEnvironment } from "./config.js";
+import { embeddingFingerprint } from "./hash.js";
+import type { FragControlPlane } from "./global-registry.js";
 import { IngestService } from "./ingest.js";
 import { PostgresDatabase } from "./postgres/database.js";
 import { PostgresSourceStore } from "./postgres/source-store.js";
@@ -191,4 +193,58 @@ export async function loadFragApplication(
   options: FragApplicationOptions = {},
 ): Promise<FragApplication> {
   return createFragApplication(parseFragConfig(await readFile(configPath, "utf8")), options);
+}
+
+export function configFromControlPlane(controlPlane: FragControlPlane): FragConfig {
+  const embedders = new Map(
+    controlPlane.embedders.list().map((record) => {
+      const identity = {
+        apiStyle: record.apiStyle,
+        model: record.model,
+        revision: record.revision,
+        dim: record.dim,
+      };
+      return [record.id, {
+        name: record.id,
+        apiStyle: record.apiStyle,
+        ...(record.baseUrl === undefined ? {} : { baseUrl: record.baseUrl }),
+        ...(record.baseUrlEnv === undefined ? {} : { baseUrlEnv: record.baseUrlEnv }),
+        model: record.model,
+        ...(record.requestModel === undefined ? {} : { requestModel: record.requestModel }),
+        revision: record.revision,
+        dim: record.dim,
+        maxTokens: record.maxTokens,
+        recommendedChunkSize: record.recommendedChunkSize,
+        tokenCounter: record.tokenCounter,
+        ...(record.tokenSafetyMargin === undefined ? {} : { tokenSafetyMargin: record.tokenSafetyMargin }),
+        apiKeyEnv: record.apiKeyEnv,
+        fingerprint: embeddingFingerprint(identity),
+      }];
+    }),
+  );
+  const dbs = new Map(
+    controlPlane.databases.list().map((record) => [record.id, {
+      name: record.id,
+      ...(record.connectionUrl === undefined ? {} : { url: record.connectionUrl }),
+      ...(record.urlEnv === undefined ? {} : { urlEnv: record.urlEnv }),
+    }]),
+  );
+  const collections = new Map(
+    controlPlane.systems.list().map((system) => [system.name, {
+      name: system.name,
+      description: system.description,
+      embedder: system.embedderId,
+      db: system.databaseId,
+      stateBackend: "same-as-db" as const,
+      mirrors: system.mirrors.map((target) => ({ target })),
+    }]),
+  );
+  return { embedders, dbs, collections };
+}
+
+export function createFragApplicationFromControlPlane(
+  controlPlane: FragControlPlane,
+  options: FragApplicationOptions = {},
+): Promise<FragApplication> {
+  return createFragApplication(configFromControlPlane(controlPlane), options);
 }

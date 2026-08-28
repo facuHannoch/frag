@@ -96,7 +96,8 @@ test("reuses a running server and loaded embedding model then probes its real di
   assert.equal(ready.dimension, 3);
   assert.equal(ready.maxTokens, 2048);
   assert.equal(ready.registration.dim, 3);
-  assert.equal(ready.registration.model, "already-loaded");
+  assert.equal(ready.registration.model, "nomic@q4");
+  assert.equal(ready.registration.requestModel, "already-loaded");
   assert.equal(ready.startedServer, false);
   assert.equal(ready.loadedByFrag, false);
   assert.equal(runner.calls.some((call) => call[0] === "load"), false);

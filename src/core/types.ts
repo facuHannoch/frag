@@ -13,6 +13,8 @@ export interface EmbedderConfig {
   readonly baseUrl?: string;
   readonly baseUrlEnv?: string;
   readonly model: string;
+  /** Provider request identifier when it differs from the canonical model identity. */
+  readonly requestModel?: string;
   readonly revision: string;
   readonly dim: number;
   readonly maxTokens: number;
@@ -25,7 +27,8 @@ export interface EmbedderConfig {
 
 export interface DatabaseConfig {
   readonly name: string;
-  readonly urlEnv: string;
+  readonly url?: string;
+  readonly urlEnv?: string;
 }
 
 export interface MirrorConfig {

@@ -4,6 +4,7 @@ export * from "./collection-status.js";
 export * from "./embedding.js";
 export * from "./errors.js";
 export * from "./hash.js";
+export * from "./global-registry.js";
 export * from "./ingest.js";
 export * from "./postgres/index.js";
 export * from "./providers.js";

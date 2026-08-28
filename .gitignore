@@ -3,3 +3,5 @@
 .agents/.artifacts/
 .env
 .mcp.json
+dist/
+node_modules/

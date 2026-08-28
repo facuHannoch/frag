@@ -177,3 +177,22 @@ export interface Embedder {
   readonly config: EmbedderConfig;
   embed(texts: readonly string[]): Promise<readonly (readonly number[])[]>;
 }
+
+export interface IngestInput {
+  readonly collection: string;
+  readonly content: string;
+  readonly sourceKey?: string;
+  readonly metadata?: unknown;
+  readonly chunks?: readonly string[];
+  readonly autoChunk?: boolean | number;
+}
+
+export interface PreparedRepresentation {
+  readonly mode: ChunkingMode;
+  readonly chunkSize: number | null;
+  readonly chunks: readonly string[];
+  readonly contentHash: string;
+  readonly representationHash: string;
+  readonly metadata: Metadata;
+  readonly metadataHash: string;
+}

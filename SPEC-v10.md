@@ -1,14 +1,36 @@
-# Frag — Spec v9 (consolidated, from scratch)
+# Frag — Spec v10 (consolidated)
 
-Status: proposal, not authoritative. Supersedes v0–v8 entirely — full
-rewrite, not a diff. Flag disagreements before building rather than silently
-deviating.
+Status: proposal, not authoritative. Supersedes v0–v9. v10 retains v9's
+retrieval, storage, concurrency, staleness, mirror, and promote invariants while
+replacing its YAML-first control plane and non-provisioning `add` flow. Flag
+disagreements before building rather than silently deviating.
+
+## Changes from v9
+
+- **Normal operation no longer requires YAML.** Frag owns one global local
+  registry and callers mutate it through the library. YAML is an explicit
+  import/export format only.
+- **`frag add` provisions a working system.** It does not merely append a
+  collection record. Embedder discovery, model readiness, PostgreSQL/pgvector,
+  schema bootstrap, and health checks must all pass before the system appears.
+- **LM Studio is the default local embedding provider.** Frag discovers
+  downloaded embedding models, starts/checks the server, loads the selected
+  model when necessary, and derives the real vector dimension with a probe.
+- **Managed local pgvector is the default database.** Frag uses Docker or
+  Podman to own a persistent local PostgreSQL+pgvector service. Connecting an
+  existing PostgreSQL server remains available as an advanced choice.
+- **Resource selection is discovery-driven.** The TUI presents searchable
+  installed models, database choices, and mirror targets. It never asks a user
+  for an "existing embedder name" or another internal identifier.
+- **Creation is atomic from the user's perspective.** Failed provisioning does
+  not leave a registered half-system. Safely removable transient resources are
+  cleaned up; persistent resources are reported precisely if cleanup is unsafe.
 
 ## Changes from v8
 
 Each change closes an ambiguity or contradiction in v8:
 
-- **Dimension changes are not reindexable in place in v9.** The dimension is
+- **Dimension changes are not reindexable in place in v10.** The dimension is
   stored explicitly on every source. A fingerprint mismatch at the same
   dimension is stale and repairable by `reindex`; a configured dimension that
   differs from stored sources is a configuration error. Create a new collection
@@ -75,10 +97,13 @@ frag/
   of that source, but it may be a caller-supplied rewrite.
 - **Representation**: the ordered set of chunks a source is currently embedded
   as, together with how they were produced.
-- **Collection**: one configured embedder plus one vector store. The atomic RAG
-  unit.
-- **Registry**: the layer managing named collections and relationships between
-  them, including mirror and promote.
+- **Collection**: the core/storage term for one configured embedder plus one
+  vector store. It is the atomic RAG unit.
+- **System**: the user-facing name for a registered collection. A v10 system
+  maps one-to-one to a collection; the TUI and general CLI say "system" while
+  storage and compatibility APIs may still say "collection".
+- **Registry**: the global control plane managing named systems, their
+  resources, and relationships including mirror and promote.
 - **Origin**: the source collection and source key from which a target source
   was promoted or mirrored. A directly ingested source has no external origin.
 - **Hub** (external): an orchestration process that may hold a registry client
@@ -92,86 +117,172 @@ frag/
   manual and explicit.
 - No permissions system. Gating is coarse: a startup allow-list plus whatever
   a hub layers on top.
-- No hybrid or keyword search and no reranking in v9. The public API is shaped
+- No hybrid or keyword search and no reranking in v10. The public API is shaped
   so these can be added without caller changes.
 - No two-phase commit across Postgres instances.
 - No automatic reindexing on embedder change, by any code path.
 - No in-place migration of an existing collection between embedding
   dimensions. Create a new collection instead.
 
-## Collection definition
+## Global control plane
 
-Configuration is declarative and git-safe. Secrets are named by environment
-variable and never embedded.
+Normal users do not create or maintain a configuration file. Frag opens one
+machine-global control-plane registry from the platform application-data
+directory:
 
-```yaml
-collections:
-  - name: local-notes
-    description: >
-      Personal working notes, drafts, research-in-progress. Private —
-      not intended for public-facing agents to query.
-    embedder: nomic-local
-    db: local-postgres
-    state_backend: same-as-db
-
-  - name: cloud-main
-    description: >
-      Curated, public-safe content. Backs the public demo agent.
-      Only content explicitly promoted here.
-    embedder: azure-openai
-    db: azure-postgres
-    state_backend: same-as-db
-    mirrors:
-      - target: local-cache
-
-  - name: local-cache
-    description: >
-      Read-through mirror of cloud-main for offline access.
-      Not written to directly.
-    embedder: nomic-local
-    db: local-postgres
-    state_backend: same-as-db
-
-embedders:
-  - name: nomic-local
-    api_style: openai
-    base_url: http://localhost:1234/v1
-    model: text-embedding-nomic-embed-text-v1.5
-    revision: "1"
-    dim: 768
-    max_tokens: 8192
-    recommended_chunk_size: 500
-    token_counter: estimate
-    token_safety_margin: 0.8
-    api_key_env: null
-
-  - name: azure-openai
-    api_style: azure-openai
-    base_url_env: AZURE_OPENAI_BASE_URL
-    model: text-embedding-3-small # placeholder; confirm against deployment
-    revision: "1"
-    dim: 1536                    # placeholder; confirm
-    max_tokens: 8191             # placeholder; confirm
-    recommended_chunk_size: 500
-    token_counter: tiktoken
-    api_key_env: AZURE_OPENAI_API_KEY
-
-dbs:
-  - name: local-postgres
-    url_env: LOCAL_DATABASE_URL
-  - name: azure-postgres
-    url_env: AZURE_DATABASE_URL
+```text
+Linux:   $XDG_DATA_HOME/frag/registry.sqlite3
+         or ~/.local/share/frag/registry.sqlite3
+macOS:   ~/Library/Application Support/Frag/registry.sqlite3
+Windows: %LOCALAPPDATA%\Frag\registry.sqlite3
 ```
 
-`description` is descriptive metadata an agent reads to judge relevance. It is
-not a primary flag or permissions rule.
+The directory and registry are created automatically on first use with
+owner-only permissions where the platform supports them. `FRAG_HOME` may
+override the directory for tests, portable installations, and deliberate
+multi-profile use. The override is a process concern, not a per-command config
+argument.
 
-`revision` is manually bumped when a provider changes a model behind a stable
-name.
+The registry is an implementation detail owned by `core/`. CLI, TUI, server,
+and library all mutate it through the same API:
+
+```typescript
+const frag = await openFrag()
+
+await frag.systems.create(input)
+await frag.systems.update(name, patch)
+await frag.systems.remove(name)
+await frag.systems.list()
+```
+
+Callers do not edit SQLite and do not coordinate a configuration file with
+operational state. Registry migrations are versioned, automatic, transactional,
+and backward compatible within a major release.
+
+The registry stores:
+
+- **systems**: name, description, embedder reference, database reference,
+  timestamps, and lifecycle status;
+- **system mirrors**: zero or more validated target-system relationships;
+- **embedders**: provider kind, endpoint, model identifier, observed dimension,
+  hard/recommended token settings, revision, and last successful health check;
+- **databases**: managed/existing kind, connection information or environment
+  reference, ownership metadata, and last successful health check; and
+- **settings**: CLI default system and managed-service preferences.
+
+Local managed credentials are generated by Frag and may be stored in this
+owner-only registry because unattended restart must work. Existing remote
+database/provider secrets default to environment-variable references. Frag does
+not silently copy arbitrary remote credentials into its registry.
+
+`description` remains metadata an agent reads to judge relevance, not a primary
+flag or permission rule.
+
+`revision` remains a manually changeable provider-generation handle, but normal
+LM Studio setup initializes it automatically and users do not see it in the
+wizard.
+
+### YAML import and export
+
+YAML is an advanced interchange format only:
+
+```text
+frag config export > frag.yaml
+frag config import frag.yaml [--replace]
+```
+
+Export omits secrets and managed database passwords. Import validates the whole
+document, resolves secret references, provisions/verifies dependencies, and
+commits registry changes transactionally. Merely placing `frag.yaml` in the
+current directory has no effect. Normal commands never fail because it is
+absent.
+
+## Dead-simple local defaults
+
+The recommended path is intentionally opinionated:
+
+- embedding provider: LM Studio on `127.0.0.1:1234`;
+- embedding model: one downloaded model selected from discovered embedding-only
+  models;
+- vector database: one Frag-managed local PostgreSQL+pgvector service shared by
+  local systems; and
+- state backend: the selected target database, as elsewhere in this spec.
 
 `max_tokens` is a correctness ceiling. `recommended_chunk_size` is a much
-smaller retrieval-quality target: overpacking a fixed-size embedding blurs the
-representation well before the hard ceiling is reached.
+smaller retrieval-quality target. Frag derives dimension from a real embedding
+probe. It obtains model limits from trustworthy provider metadata when present
+and otherwise uses a provider-specific tested default marked as inferred in the
+registry.
+
+### LM Studio lifecycle
+
+Frag detects the `lms` executable and uses machine-readable discovery:
+
+```text
+lms ls --embedding --json
+lms server status
+lms server start --bind 127.0.0.1 --port 1234
+lms load <model-key> --identifier <stable-id>
+```
+
+The wizard lists only downloaded embedding models. If none exist, it offers a
+download action rather than an empty free-text prompt. Frag may use LM Studio's
+current REST model-management API when available, but the observable behavior
+is the same.
+
+After selection Frag ensures the local server is reachable, loads or relies on
+LM Studio auto-loading the model, sends a small embedding request, verifies
+finite output, and records the observed dimension. A model is never registered
+from its filename alone.
+
+If LM Studio or `lms` is absent, the wizard explains how to install it and also
+offers an advanced OpenAI-compatible provider path. Frag does not pretend it can
+install LM Studio itself.
+
+### Managed local PostgreSQL
+
+The default database choice is `Managed local PostgreSQL`. Frag:
+
+1. detects Docker or Podman;
+2. creates/reuses a Frag-owned persistent volume;
+3. starts a loopback-only PostgreSQL image containing pgvector;
+4. generates and stores a local password;
+5. waits for readiness;
+6. creates/enables the vector extension and Frag schema; and
+7. performs a real insert, similarity query, and rollback-safe cleanup probe.
+
+The initial defaults are one service, one database, and collection-level
+separation inside it. Users do not choose ports, database names, extensions, or
+connection strings in the normal wizard.
+
+The alternative `Existing PostgreSQL…` path asks for a connection or environment
+reference, verifies database creation/extension permissions as applicable, and
+runs the same schema/vector probe. It never registers an unverified connection.
+
+If no supported container runtime exists, the managed option is shown as
+unavailable with the reason and the existing-PostgreSQL option remains usable.
+
+### Atomic provisioning lifecycle
+
+`systems.create` and `frag add` use one provisioning workflow. Discovery is
+read-only. After the user confirms, Frag:
+
+1. builds a provisional plan without adding a visible system;
+2. starts or reuses the selected provider and database dependencies;
+3. health-checks the embedder and derives its actual dimension;
+4. enables/bootstrap-checks pgvector and performs a real vector probe;
+5. validates the system name, mirror targets, and absence of mirror cycles;
+6. commits the resource records, system record, mirror relationships, and
+   default-system setting in one local registry transaction; and
+7. reports the ready system and the resources it owns or reuses.
+
+If any step fails, no system becomes visible. Frag stops and removes only
+resources created by that attempt when doing so is known to be safe. It never
+deletes a reused service, existing database, persistent volume, or downloaded
+model. Any persistent resource that could not safely be cleaned up is named in
+the error with a recovery command. A small provisioning journal in the registry
+supports cleanup after process interruption; journal entries are not systems
+and are never returned by `systems.list`.
 
 ## Hashes, fingerprint, and dimension
 
@@ -296,11 +407,11 @@ may be condensed, rephrased, overlapped, or reorganized for retrieval. The
 source is what the user supplied; the chunks are what was embedded. Neither can
 be reconstructed reliably from the other.
 
-Metadata supplied by the v9 public ingest API is source-level metadata. It is
+Metadata supplied by the v10 public ingest API is source-level metadata. It is
 stored authoritatively on the source and copied onto every chunk as a retrieval
 snapshot. A metadata-only update changes the source and all of its chunk
 snapshots transactionally without regenerating embeddings. Per-chunk metadata
-input is not part of the v9 public API.
+input is not part of the v10 public API.
 
 ## Token counting
 
@@ -373,7 +484,7 @@ if oversized. `source_key` defaults to the filename; `--source-key` overrides.
 
 Within a collection, `source_key` is the stable caller-visible identity.
 
-For bare notes without `--source-key`, v9 generates a key from the content hash:
+For bare notes without `--source-key`, v10 generates a key from the content hash:
 
 ```text
 note-<first 16 hex characters of content_hash>
@@ -723,10 +834,12 @@ response sets `stale_embeddings: true` and logs a warning.
 
 ## Operational state location
 
-Config is portable and lives in git. Promote/mirror completion state is shared
-operational data and lives in the target collection's `state_backend`.
+System definitions live in the global local registry. Promote/mirror completion
+state is shared operational data and lives in the target collection's
+`state_backend`; keeping it only in the local registry would make two machines
+writing the same target disagree about completed work.
 
-Only `same-as-db` is implemented in v9. The target source, target chunks, and
+Only `same-as-db` is implemented in v10. The target source, target chunks, and
 state row are committed in one target-side transaction. This makes retries
 idempotent. It does not make cross-instance operations atomic end-to-end, and
 the spec makes no such claim.
@@ -864,7 +977,7 @@ the collection stale; completed sources remain safely reindexed. Retrying acts
 only on those still stale.
 
 Before doing any work, reindex refuses if any stored source dimension differs
-from configuration and explains that v9 requires a new collection.
+from configuration and explains that v10 requires a new system.
 
 `--dry-run` reports stale source count, chunk count, configured fingerprint,
 stored fingerprint groups, and estimated embedding calls. It writes nothing.
@@ -896,30 +1009,67 @@ public surface.
 ## CLI surface
 
 ```text
-frag put <collection> "<text>" [--source-key <key>] [--metadata <json>]
-                                [--chunks "c1" "c2" ... | --auto-chunk[=<size>]]
-                                [--yes]
-frag put <collection> --file <path> [--source-key <key>] [--metadata <json>]
-                                [--chunks "c1" "c2" ... | --auto-chunk[=<size>]]
-                                [--yes]
-frag search <collection> "<query>" [--k <n>]        # alias: get
-frag sources <collection> [--source-key <key>]
-frag rm <collection> --source-key <key>
-frag reindex <collection> [--dry-run]
-frag add [--embedder <n> --db <n> --name <n> --description <text>]
+frag add
+frag add --name <name> --description <text> --lmstudio-model <model-key>
+         [--database managed-postgres | --database-url-env <env>]
+         [--mirror <system> ...] [--yes]
 frag list
+frag config set-default <system>
+frag config export
+frag config import <path> [--replace]
+
+frag put <system> "<text>" [--source-key <key>] [--metadata <json>]
+                                [--chunks "c1" "c2" ... | --auto-chunk[=<size>]]
+                                [--yes]
+frag put <system> --file <path> [--source-key <key>] [--metadata <json>]
+                                [--chunks "c1" "c2" ... | --auto-chunk[=<size>]]
+                                [--yes]
+frag search <system> "<query>" [--k <n>]        # alias: get
+frag sources <system> [--source-key <key>]
+frag rm <system> --source-key <key>
+frag reindex <system> [--dry-run]
 frag promote --from <n> --to <n> --source <key>
              [--target-source-key <key>]
-frag config set-default <n>
 frag serve [--collections a,b,c]
 frag mcp [--collections a,b,c]
 ```
 
-`add` launches the TUI only when invoked without flags.
+`frag add` without provisioning flags launches this three-step TUI:
 
-`<collection>` is optional on CLI `put` and `search`, falling back to local
-machine config. Server and hub/library calls always require an explicit
-collection and never consult the CLI default.
+```text
+Step 1 of 3 — Embedding model
+Select embedding model:
+  > text-embedding-nomic-embed-text-v1.5
+    ...downloaded embedding models
+
+Step 2 of 3 — Vector database
+Database:
+  > Managed local PostgreSQL
+    Existing PostgreSQL…
+
+Step 3 of 3 — System configuration
+Name:
+Description:
+Mirroring:
+  > No mirroring
+    ...existing systems
+
+Create system? [Y/n]
+```
+
+Lists support arrow-key navigation and search-as-you-type filtering. Disabled
+choices remain visible with a short reason. The summary before confirmation
+states what Frag will start, create, and reuse. Provisioning progress is shown
+as named steps, and success ends with one copyable `frag put` example.
+
+Flags provide the same workflow non-interactively for scripts. They describe
+provider/database choices, not internal registry identifiers. An incomplete
+non-interactive invocation errors with the missing flags and never falls back
+to a prompt.
+
+`<system>` is optional on CLI `put` and `search`, falling back to the default in
+the global registry. Server and hub/library calls always require an explicit
+collection/system and never consult the CLI default.
 
 ## MCP and HTTP surface
 
@@ -951,7 +1101,7 @@ list_collections(): Promise<Array<{
 `chunks` and `autoChunk` are mutually exclusive. Server ingest never prompts.
 
 Promote, reindex, removal, and configuration are intentionally absent from the
-v9 MCP/HTTP surface. They remain CLI/library administrative operations unless a
+v10 MCP/HTTP surface. They remain CLI/library administrative operations unless a
 future use case justifies exposing them.
 
 ## Failure and error contract
@@ -983,9 +1133,9 @@ smaller batches to isolate the chunk; it must not guess.
    deployment.
 2. **LM Studio tokenize endpoint** — determine whether its current server API
    exposes exact tokenization. If not, the primary local path uses `estimate`.
-3. **Source-level search results** — v9 is chunk-level. Add roll-up only after a
+3. **Source-level search results** — v10 is chunk-level. Add roll-up only after a
    concrete CLI or API requirement defines scoring and pagination semantics.
-4. **Mirror target key mapping in config** — v9 permits a configured mapping but
+4. **Mirror target key mapping** — v10 permits a configured mapping but
    only defines identity semantics, not a templating language. Until one is
    specified, mirrors use the unchanged source key.
 
@@ -1070,8 +1220,24 @@ smaller batches to isolate the chunk; it must not guess.
 - Package installs standalone; every CLI command works against local Postgres
   plus LM Studio.
 - `core/` imports from a throwaway script without CLI, TUI, or server modules.
-- A fresh clone with config but no prior `add` bootstraps an empty Postgres on
-  serve and can immediately put/search.
+- On a machine with LM Studio, one downloaded embedding model, and Docker or
+  Podman, `frag add` requires no file, URL, port, database name, or extension
+  knowledge and ends with a working put/search round trip.
+- The model picker contains only actual downloaded embedding models and is
+  searchable; the database picker defaults to managed PostgreSQL; the mirror
+  picker lists existing systems and defaults to no mirroring.
+- A failed embedder probe, database startup, pgvector bootstrap, or final
+  registry transaction leaves no visible half-system and reports any resource
+  that cannot safely be cleaned up.
+- Closing and reopening the process preserves systems and the default through
+  the platform registry. Running from another current directory behaves the
+  same and never searches for `frag.yaml`.
+- A library-only test creates, lists, updates, and removes a system through
+  `openFrag().systems` and observes the same registry as the CLI.
+- YAML export/import round-trips system definitions without secrets; merely
+  placing YAML in the working directory changes nothing.
+- A fresh machine with a populated global registry but an empty target database
+  bootstraps schema at connection time and can immediately put/search.
 - `frag mcp --collections a,b` lists and serves exactly those collections and
   does not disclose any other collection through errors.
 - A stub hub imports the real library, holds one client, and demonstrates

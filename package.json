@@ -26,7 +26,7 @@
     "dist",
     "README.md",
     "frag.example.yaml",
-    "SPEC-v9.md"
+    "SPEC-v10.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/make-bin-executable.mjs",

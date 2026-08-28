@@ -4,7 +4,7 @@ Frag is a standalone retrieval-augmented storage and search package. Its core
 API is independently importable, while the `frag` executable supplies CLI,
 human TUI, HTTP, and MCP callers over the same behavior.
 
-The design contract is [SPEC-v9.md](./SPEC-v9.md).
+The design contract is [SPEC-v10.md](./SPEC-v10.md).
 
 ## Development
 

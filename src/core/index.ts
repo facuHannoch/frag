@@ -6,6 +6,7 @@ export * from "./errors.js";
 export * from "./hash.js";
 export * from "./global-registry.js";
 export * from "./ingest.js";
+export * from "./lmstudio.js";
 export * from "./postgres/index.js";
 export * from "./providers.js";
 export * from "./registry.js";

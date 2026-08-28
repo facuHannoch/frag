@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./config-interchange.js";
 export * from "./chunking.js";
 export * from "./collection-status.js";
 export * from "./embedding.js";

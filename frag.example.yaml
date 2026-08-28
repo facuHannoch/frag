@@ -1,23 +1,27 @@
-collections:
+version: 10
+
+systems:
   - name: local-notes
     description: Private working notes and drafts.
-    embedder: nomic-local
-    db: local-postgres
-    state_backend: same-as-db
+    embedder: lmstudio:nomic
+    database: managed:local
+    mirrors: []
 
 embedders:
-  - name: nomic-local
+  - id: lmstudio:nomic
+    provider_kind: lmstudio
     api_style: openai
-    base_url: http://localhost:1234/v1
     model: text-embedding-nomic-embed-text-v1.5
     revision: "1"
-    dim: 768
     max_tokens: 8192
     recommended_chunk_size: 500
     token_counter: estimate
     token_safety_margin: 0.8
     api_key_env: null
 
-dbs:
-  - name: local-postgres
-    url_env: LOCAL_DATABASE_URL
+databases:
+  - id: managed:local
+    kind: managed-postgres
+
+settings:
+  default_system: local-notes

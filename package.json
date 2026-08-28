@@ -29,7 +29,7 @@
     "SPEC-v10.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/make-bin-executable.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-bin-executable.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test 'test/**/*.test.ts'"
   },

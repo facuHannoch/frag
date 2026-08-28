@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { Command, Option } from "commander";
 
@@ -7,6 +9,9 @@ import {
   ConfigurationError,
   SystemProvisioner,
   createFragApplicationFromControlPlane,
+  exportFragYaml,
+  importFragYaml,
+  recoverInterruptedProvisioning,
   openFrag,
   type FragApplication,
   type FragControlPlane,
@@ -268,6 +273,37 @@ export function createCli(): Command {
         controlPlane.close();
       }
     });
+  config.command("export").action(async () => {
+    const controlPlane = await openFrag();
+    try {
+      process.stdout.write(exportFragYaml(controlPlane));
+    } finally {
+      controlPlane.close();
+    }
+  });
+  config
+    .command("import")
+    .argument("<path>")
+    .option("--replace")
+    .action(async (path: string, options) => {
+      const controlPlane = await openFrag();
+      try {
+        output(await importFragYaml(controlPlane, await readFile(path, "utf8"), {
+          replace: options.replace === true,
+          onProgress: (message) => process.stderr.write(`${message}\n`),
+        }));
+      } finally {
+        controlPlane.close();
+      }
+    });
+  config.command("recover").action(async () => {
+    const controlPlane = await openFrag();
+    try {
+      output(await recoverInterruptedProvisioning(controlPlane));
+    } finally {
+      controlPlane.close();
+    }
+  });
 
   program
     .command("serve")
@@ -306,7 +342,19 @@ export async function main(argv = process.argv): Promise<void> {
   await createCli().parseAsync(argv);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isMainModule(
+  executablePath = process.argv[1],
+  moduleUrl = import.meta.url,
+): boolean {
+  if (executablePath === undefined) return false;
+  try {
+    return realpathSync(executablePath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

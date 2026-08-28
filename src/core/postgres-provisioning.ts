@@ -29,6 +29,11 @@ export interface ManagedPostgresReady {
   readonly startedExistingContainer: boolean;
 }
 
+export interface ManagedPostgresRecovery {
+  readonly recovered: boolean;
+  readonly runtimes: readonly ContainerRuntime[];
+}
+
 export interface ExistingPostgresInput {
   readonly id: string;
   readonly urlEnv: string;
@@ -223,6 +228,27 @@ export class PostgresProvisioner {
         { failures, container: MANAGED_CONTAINER, volume: MANAGED_VOLUME },
       );
     }
+  }
+
+  async recoverManagedOrphans(): Promise<ManagedPostgresRecovery> {
+    const recovered: ContainerRuntime[] = [];
+    for (const runtime of await this.availableRuntimes()) {
+      const container = await this.#containerStatus(runtime);
+      const volume = await this.#volumeExists(runtime);
+      if (!container.exists && !volume) continue;
+      const failures = await this.#cleanup(runtime, {
+        createdContainer: container.exists,
+        createdVolume: volume,
+        startedExistingContainer: false,
+      });
+      if (failures.length > 0) {
+        throw new ConfigurationError(`Could not recover managed PostgreSQL resources: ${failures.join(", ")}`, {
+          failures,
+        });
+      }
+      recovered.push(runtime);
+    }
+    return { recovered: recovered.length > 0, runtimes: recovered };
   }
 
   async #containerStatus(runtime: ContainerRuntime): Promise<ContainerStatus> {

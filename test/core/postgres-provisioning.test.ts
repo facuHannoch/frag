@@ -256,3 +256,16 @@ test("names persistent resources when failure cleanup is incomplete", async () =
       error.message.includes("frag-postgres-data-v1"),
   );
 });
+
+test("recovers only ownership-labelled managed container and volume orphans", async () => {
+  const runner = new FakeRunner((executable, arguments_) => {
+    if (arguments_[0] === "info") return executable === "podman" ? ok("5") : { exitCode: 1, stdout: "", stderr: "" };
+    if (arguments_[0] === "container") return ok("true|true");
+    if (arguments_[0] === "volume" && arguments_[1] === "inspect") return ok("true");
+    return ok();
+  });
+  const recovered = await new PostgresProvisioner({ runner }).recoverManagedOrphans();
+  assert.deepEqual(recovered, { recovered: true, runtimes: ["podman"] });
+  assert.ok(runner.calls.some(({ arguments: arguments_ }) => arguments_.join(" ") === "rm --force frag-postgres-v1"));
+  assert.ok(runner.calls.some(({ arguments: arguments_ }) => arguments_.join(" ") === "volume rm frag-postgres-data-v1"));
+});

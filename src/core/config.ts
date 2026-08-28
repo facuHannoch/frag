@@ -136,7 +136,7 @@ function parseCollection(value: unknown, index: number): CollectionConfig {
   const raw = objectAt(value, path);
   const stateBackend = stringAt(raw.state_backend, `${path}.state_backend`);
   if (stateBackend !== "same-as-db") {
-    throw new ConfigurationError(`${path}.state_backend must be same-as-db in v9`);
+    throw new ConfigurationError(`${path}.state_backend must be same-as-db in v10`);
   }
   const mirrors: MirrorConfig[] = (raw.mirrors === undefined
     ? []

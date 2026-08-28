@@ -1017,6 +1017,7 @@ frag list
 frag config set-default <system>
 frag config export
 frag config import <path> [--replace]
+frag config recover
 
 frag put <system> "<text>" [--source-key <key>] [--metadata <json>]
                                 [--chunks "c1" "c2" ... | --auto-chunk[=<size>]]
@@ -1066,6 +1067,12 @@ Flags provide the same workflow non-interactively for scripts. They describe
 provider/database choices, not internal registry identifiers. An incomplete
 non-interactive invocation errors with the missing flags and never falls back
 to a prompt.
+
+`frag config recover` is the explicit crash-recovery path. It reads journaled
+provisioning attempts, removes only ownership-labelled managed PostgreSQL
+resources that have no registry record, and clears successfully reconciled
+journal entries. It does not unload an unowned model or stop an LM Studio
+server whose pre-attempt state cannot be proven.
 
 `<system>` is optional on CLI `put` and `search`, falling back to the default in
 the global registry. Server and hub/library calls always require an explicit

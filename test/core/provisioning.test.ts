@@ -8,6 +8,7 @@ import {
   ConfigurationError,
   SystemProvisioner,
   openFrag,
+  recoverInterruptedProvisioning,
   type DatabaseRegistration,
   type EmbedderRegistration,
   type LMStudioProvisioning,
@@ -184,6 +185,30 @@ test("validates names and mirror targets before starting external dependencies",
     /Unknown mirror target/u,
   );
   assert.equal(ensured, 0);
+  assert.equal(controlPlane.provisioning.list().length, 0);
+  controlPlane.close();
+});
+
+test("recovers labelled managed resources after an interrupted journaled attempt", async () => {
+  const controlPlane = await openFrag({ registryPath: await registryPath() });
+  controlPlane.provisioning.record("interrupted", JSON.stringify({
+    system: "notes",
+    databaseKind: "managed-postgres",
+  }));
+  let calls = 0;
+  const result = await recoverInterruptedProvisioning(controlPlane, {
+    async recoverManagedOrphans() {
+      calls += 1;
+      return { recovered: true, runtimes: ["podman"] };
+    },
+  });
+  assert.deepEqual(result, {
+    journalEntries: 1,
+    clearedEntries: 1,
+    recoveredManagedPostgres: true,
+    recoveredRuntimes: ["podman"],
+  });
+  assert.equal(calls, 1);
   assert.equal(controlPlane.provisioning.list().length, 0);
   controlPlane.close();
 });

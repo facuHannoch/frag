@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { ConfigurationError } from "./errors.js";
-import type { FragControlPlane, SystemRecord } from "./global-registry.js";
+import type {
+  FragControlPlane,
+  SystemCreateInput,
+  SystemRecord,
+} from "./global-registry.js";
 import { LMStudioService, type LMStudioModel, type LMStudioReadyModel } from "./lmstudio.js";
 import {
   PostgresProvisioner,
@@ -38,6 +42,12 @@ export interface SystemProvisionerOptions {
   readonly onProgress?: (step: ProvisioningStep, message: string) => void;
 }
 
+export interface PreparedSystem {
+  readonly input: SystemCreateInput;
+  finish(): void;
+  release(): Promise<void>;
+}
+
 export interface LMStudioProvisioning {
   discoverEmbeddingModels(): Promise<LMStudioModel[]>;
   ensureReady(modelKey: string): Promise<LMStudioReadyModel>;
@@ -54,6 +64,39 @@ export interface PostgresProvisioning {
     input: Parameters<PostgresProvisioner["verifyExisting"]>[0],
   ): ReturnType<PostgresProvisioner["verifyExisting"]>;
   releaseManaged(ready: ManagedPostgresReady): Promise<void>;
+}
+
+export interface ProvisioningRecoveryResult {
+  readonly journalEntries: number;
+  readonly clearedEntries: number;
+  readonly recoveredManagedPostgres: boolean;
+  readonly recoveredRuntimes: readonly string[];
+}
+
+export async function recoverInterruptedProvisioning(
+  controlPlane: FragControlPlane,
+  postgres: Pick<PostgresProvisioner, "recoverManagedOrphans"> = new PostgresProvisioner(),
+): Promise<ProvisioningRecoveryResult> {
+  const entries = controlPlane.provisioning.list();
+  if (entries.length === 0) {
+    return {
+      journalEntries: 0,
+      clearedEntries: 0,
+      recoveredManagedPostgres: false,
+      recoveredRuntimes: [],
+    };
+  }
+  let recovery = { recovered: false, runtimes: [] as readonly string[] };
+  if (controlPlane.databases.get("managed:local") === null) {
+    recovery = await postgres.recoverManagedOrphans();
+  }
+  for (const entry of entries) controlPlane.provisioning.remove(entry.id);
+  return {
+    journalEntries: entries.length,
+    clearedEntries: entries.length,
+    recoveredManagedPostgres: recovery.recovered,
+    recoveredRuntimes: recovery.runtimes,
+  };
 }
 
 export class SystemProvisioner {
@@ -78,6 +121,26 @@ export class SystemProvisioner {
   }
 
   async create(input: ProvisionSystemInput): Promise<SystemRecord> {
+    const prepared = await this.prepare(input);
+    try {
+      this.#onProgress("registry-commit", `Registering system ${input.name}`);
+      const system = this.#controlPlane.systems.create(prepared.input);
+      prepared.finish();
+      this.#onProgress("complete", `System ${input.name} is ready`);
+      return system;
+    } catch (error) {
+      await prepared.release().catch((cleanupError) => {
+        throw new ConfigurationError(
+          `System ${input.name} was not registered and some provisioned resources need recovery`,
+          { cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError) },
+          { cause: error },
+        );
+      });
+      throw error;
+    }
+  }
+
+  async prepare(input: ProvisionSystemInput): Promise<PreparedSystem> {
     this.#validateBeforeProvisioning(input);
     const attemptId = randomUUID();
     this.#controlPlane.provisioning.record(attemptId, JSON.stringify({
@@ -88,7 +151,6 @@ export class SystemProvisioner {
     }));
     let embedderReady: LMStudioReadyModel | undefined;
     let postgresReady: ManagedPostgresReady | undefined;
-    let committed = false;
     try {
       this.#onProgress("embedding-model", `Preparing ${input.lmStudioModelKey}`);
       embedderReady = await this.#lmStudio.ensureReady(input.lmStudioModelKey);
@@ -104,21 +166,43 @@ export class SystemProvisioner {
             dimension: embedderReady.dimension,
             ...(input.database.environment === undefined ? {} : { environment: input.database.environment }),
           });
-      this.#onProgress("registry-commit", `Registering system ${input.name}`);
-      const system = this.#controlPlane.systems.create({
+      const registrationInput: SystemCreateInput = {
         name: input.name,
         description: input.description,
         embedder: embedderReady.registration,
         database,
         mirrors: input.mirrors ?? [],
         ...(input.setDefault === undefined ? {} : { setDefault: input.setDefault }),
-      });
-      committed = true;
-      this.#controlPlane.provisioning.remove(attemptId);
-      this.#onProgress("complete", `System ${input.name} is ready`);
-      return system;
+      };
+      let finished = false;
+      return {
+        input: registrationInput,
+        finish: () => {
+          if (finished) return;
+          this.#controlPlane.provisioning.remove(attemptId);
+          finished = true;
+        },
+        release: async () => {
+          if (finished) return;
+          const cleanupErrors: unknown[] = [];
+          if (postgresReady !== undefined) {
+            await this.#postgres.releaseManaged(postgresReady).catch((error) => cleanupErrors.push(error));
+          }
+          if (embedderReady !== undefined) {
+            await this.#lmStudio.release(embedderReady).catch((error) => cleanupErrors.push(error));
+          }
+          if (cleanupErrors.length === 0) {
+            this.#controlPlane.provisioning.remove(attemptId);
+            finished = true;
+            return;
+          }
+          throw new ConfigurationError("Provisioned resources need recovery", {
+            attemptId,
+            cleanupErrors: cleanupErrors.map((item) => item instanceof Error ? item.message : String(item)),
+          });
+        },
+      };
     } catch (error) {
-      if (committed) throw error;
       const cleanupErrors: unknown[] = [];
       if (postgresReady !== undefined) {
         await this.#postgres.releaseManaged(postgresReady).catch((cleanupError) => cleanupErrors.push(cleanupError));

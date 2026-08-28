@@ -83,6 +83,11 @@ export interface SystemUpdatePatch {
   readonly mirrors?: readonly string[];
 }
 
+export interface SystemBatchOptions {
+  readonly replace?: boolean;
+  readonly defaultSystem?: string | null;
+}
+
 export interface ProvisioningJournalEntry {
   readonly id: string;
   readonly payload: string;
@@ -428,6 +433,58 @@ export class FragControlPlane {
         this.#setSetting("defaultSystem", name);
       }
       return this.systems.get(name)!;
+    }),
+    importPrepared: (
+      inputs: readonly SystemCreateInput[],
+      options: SystemBatchOptions = {},
+    ): SystemRecord[] => runTransaction(this.#database, () => {
+      const names = inputs.map((input) => nonEmpty(input.name, "system.name"));
+      if (new Set(names).size !== names.length) throw new ConfigurationError("Imported system names must be unique");
+      if (options.replace === true) {
+        this.#database.prepare("DELETE FROM system_mirrors").run();
+        this.#database.prepare("DELETE FROM systems").run();
+        this.#database.prepare("DELETE FROM settings WHERE key = 'defaultSystem'").run();
+      } else {
+        const conflict = names.find((name) => this.systems.get(name) !== null);
+        if (conflict !== undefined) throw new ConfigurationError(`System ${conflict} already exists`);
+      }
+      const now = new Date().toISOString();
+      const insertSystem = this.#database.prepare(`
+        INSERT INTO systems
+          (name, description, embedder_id, database_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'ready', ?, ?)
+      `);
+      for (const input of inputs) {
+        this.#ensureEmbedder(input.embedder);
+        this.#ensureDatabase(input.database);
+        insertSystem.run(
+          input.name,
+          nonEmpty(input.description, "system.description"),
+          input.embedder.id,
+          input.database.id,
+          now,
+          now,
+        );
+      }
+      const insertMirror = this.#database.prepare(
+        "INSERT INTO system_mirrors (source_system, target_system) VALUES (?, ?)",
+      );
+      for (const input of inputs) {
+        for (const target of this.#validateMirrors(input.name, input.mirrors ?? [])) {
+          insertMirror.run(input.name, target);
+        }
+      }
+      if (options.defaultSystem === null) {
+        this.#database.prepare("DELETE FROM settings WHERE key = 'defaultSystem'").run();
+      } else if (options.defaultSystem !== undefined) {
+        if (this.systems.get(options.defaultSystem) === null) {
+          throw new ConfigurationError(`Unknown default system ${options.defaultSystem}`);
+        }
+        this.#setSetting("defaultSystem", options.defaultSystem);
+      } else if (this.settings.getDefaultSystem() === null && names[0] !== undefined) {
+        this.#setSetting("defaultSystem", names[0]);
+      }
+      return names.map((name) => this.systems.get(name)!);
     }),
     update: (name: string, patch: SystemUpdatePatch): SystemRecord => runTransaction(this.#database, () => {
       const current = this.systems.get(name);

@@ -34,7 +34,13 @@ database, pgvector, and schema before the system becomes visible.
 
 Systems live in Frag's platform application-data directory. `FRAG_HOME` can
 override that location for a deliberate separate profile. YAML is reserved for
-explicit import/export rather than normal startup.
+explicit, secret-free import/export rather than normal startup:
+
+```sh
+frag config export > frag.yaml
+frag config import frag.yaml
+frag config recover       # clean up a journaled interrupted setup
+```
 
 ## CLI
 

@@ -8,6 +8,7 @@ export * from "./global-registry.js";
 export * from "./ingest.js";
 export * from "./lmstudio.js";
 export * from "./postgres/index.js";
+export * from "./postgres-provisioning.js";
 export * from "./providers.js";
 export * from "./registry.js";
 export * from "./reindex.js";

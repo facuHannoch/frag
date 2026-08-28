@@ -10,8 +10,16 @@ export interface CommandResult {
   readonly stderr: string;
 }
 
+export interface CommandRunOptions {
+  readonly environment?: Readonly<Record<string, string>>;
+}
+
 export interface CommandRunner {
-  run(executable: string, arguments_: readonly string[]): Promise<CommandResult>;
+  run(
+    executable: string,
+    arguments_: readonly string[],
+    options?: CommandRunOptions,
+  ): Promise<CommandResult>;
 }
 
 export interface LMStudioModel {
@@ -50,9 +58,19 @@ export interface LMStudioOptions {
 }
 
 export class ProcessCommandRunner implements CommandRunner {
-  async run(executable: string, arguments_: readonly string[]): Promise<CommandResult> {
+  async run(
+    executable: string,
+    arguments_: readonly string[],
+    options: CommandRunOptions = {},
+  ): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(executable, arguments_, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(executable, arguments_, {
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: options.environment === undefined
+          ? process.env
+          : { ...process.env, ...options.environment },
+      });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));

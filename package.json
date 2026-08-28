@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Retrieval-augmented storage and search",
   "type": "module",
+  "bin": {
+    "frag": "./dist/cli/main.js"
+  },
   "main": "./dist/core/index.js",
   "types": "./dist/core/index.d.ts",
   "exports": {
@@ -13,14 +16,20 @@
     "./core": {
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
     }
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "frag.example.yaml",
+    "SPEC-v9.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/make-bin-executable.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test 'test/**/*.test.ts'"
   },
@@ -28,6 +37,9 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
+    "js-tiktoken": "^1.0.21",
     "pg": "^8.16.3",
     "yaml": "^2.8.1"
   },

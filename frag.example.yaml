@@ -1,0 +1,23 @@
+collections:
+  - name: local-notes
+    description: Private working notes and drafts.
+    embedder: nomic-local
+    db: local-postgres
+    state_backend: same-as-db
+
+embedders:
+  - name: nomic-local
+    api_style: openai
+    base_url: http://localhost:1234/v1
+    model: text-embedding-nomic-embed-text-v1.5
+    revision: "1"
+    dim: 768
+    max_tokens: 8192
+    recommended_chunk_size: 500
+    token_counter: estimate
+    token_safety_margin: 0.8
+    api_key_env: null
+
+dbs:
+  - name: local-postgres
+    url_env: LOCAL_DATABASE_URL

@@ -10,4 +10,5 @@ export * from "./registry.js";
 export * from "./reindex.js";
 export * from "./search.js";
 export * from "./store.js";
+export * from "./transfer.js";
 export * from "./types.js";

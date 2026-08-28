@@ -168,6 +168,19 @@ export interface ReindexResult {
   readonly storedFingerprintGroups: Readonly<Record<string, number>>;
 }
 
+export interface TransferResult {
+  readonly operation: Operation;
+  readonly sourceCollection: string;
+  readonly sourceKey: string;
+  readonly targetCollection: string;
+  readonly targetSourceKey: string;
+  readonly skipped: boolean;
+  readonly changed: boolean;
+  readonly reembedded: boolean;
+  readonly reusedVectors: boolean;
+  readonly targetSourceId?: number;
+}
+
 export interface TokenCounter {
   count(text: string): Promise<number>;
   isExact(): boolean;

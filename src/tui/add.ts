@@ -6,6 +6,7 @@ import {
   SystemProvisioner,
   type FragControlPlane,
   type ProvisionSystemInput,
+  type ProvisioningProgressState,
   type ProvisioningStep,
   type SystemRecord,
 } from "../core/index.js";
@@ -22,7 +23,7 @@ export interface WizardPrompter {
   input(message: string, options?: { readonly defaultValue?: string }): Promise<string>;
   confirm(message: string, defaultValue?: boolean): Promise<boolean>;
   activity<T>(message: string, operation: () => Promise<T>): Promise<T>;
-  progress(step: ProvisioningStep, message: string): void;
+  progress(step: ProvisioningStep, message: string, state: ProvisioningProgressState): void;
   note(message: string): void;
 }
 
@@ -56,6 +57,9 @@ export function fitTerminalLine(text: string, columns: number): string {
 }
 
 export class TerminalWizardPrompter implements WizardPrompter {
+  #progressTimer: ReturnType<typeof setInterval> | undefined;
+  #progressFrame = 0;
+
   async activity<T>(message: string, operation: () => Promise<T>): Promise<T> {
     if (!process.stdout.isTTY) {
       process.stdout.write(`  … ${message}\n`);
@@ -171,8 +175,29 @@ export class TerminalWizardPrompter implements WizardPrompter {
     return answer === "y" || answer === "yes";
   }
 
-  progress(_step: ProvisioningStep, message: string): void {
-    process.stdout.write(`  • ${message}\n`);
+  progress(_step: ProvisioningStep, message: string, state: ProvisioningProgressState): void {
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    if (state === "start") {
+      if (this.#progressTimer !== undefined) clearInterval(this.#progressTimer);
+      if (!process.stdout.isTTY) {
+        process.stdout.write(`  … ${message}\n`);
+        return;
+      }
+      this.#progressFrame = 0;
+      const render = (): void => {
+        process.stdout.write(`\r\x1b[2K  ${frames[this.#progressFrame++ % frames.length]} ${message}`);
+      };
+      render();
+      this.#progressTimer = setInterval(render, 80);
+      return;
+    }
+    if (this.#progressTimer !== undefined) {
+      clearInterval(this.#progressTimer);
+      this.#progressTimer = undefined;
+    }
+    const icon = state === "success" ? "✓" : "✗";
+    const prefix = process.stdout.isTTY ? "\r\x1b[2K" : "";
+    process.stdout.write(`${prefix}  ${icon} ${message}\n`);
   }
 
   note(message: string): void {
@@ -192,7 +217,7 @@ export async function runAddWizard(
   const prompter = options.prompter ?? new TerminalWizardPrompter();
   let progressTarget = prompter;
   const provisioner = options.provisioner ?? new SystemProvisioner(controlPlane, {
-    onProgress: (step, message) => progressTarget.progress(step, message),
+    onProgress: (step, message, state) => progressTarget.progress(step, message, state),
   });
 
   prompter.note("Step 1 of 3 — Embedding model");

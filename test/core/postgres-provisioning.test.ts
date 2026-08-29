@@ -214,6 +214,24 @@ test("verifies existing PostgreSQL while persisting only its environment referen
   );
 });
 
+test("does not retry an unreachable existing PostgreSQL like a starting managed container", async () => {
+  const database = new FakeDatabase();
+  database.failReadiness = true;
+  const provisioner = new PostgresProvisioner({
+    runner: new FakeRunner(() => ok()),
+    databaseFactory: () => database,
+    readinessAttempts: 5,
+    readinessDelayMs: 0,
+  });
+  await assert.rejects(() => provisioner.verifyExisting({
+    id: "existing:offline",
+    urlEnv: "OFFLINE_DATABASE_URL",
+    dimension: 4,
+    environment: { OFFLINE_DATABASE_URL: "postgresql://offline.example/frag" },
+  }), /did not become ready/u);
+  assert.equal(database.queries.filter(({ text }) => text === "SELECT 1 AS ready").length, 1);
+});
+
 test("removes newly created resources when database readiness fails", async () => {
   const runner = newResourceRunner();
   const database = new FakeDatabase();

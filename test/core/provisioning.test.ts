@@ -126,7 +126,7 @@ test("provisions dependencies then atomically exposes a ready system", async () 
   const provisioner = new SystemProvisioner(controlPlane, {
     lmStudio,
     postgres,
-    onProgress: (step) => progress.push(step),
+    onProgress: (step, _message, state) => progress.push(`${step}:${state}`),
   });
   const created = await provisioner.create({
     name: "notes",
@@ -139,7 +139,15 @@ test("provisions dependencies then atomically exposes a ready system", async () 
   assert.equal(controlPlane.provisioning.list().length, 0);
   assert.equal(lmStudio.released, 0);
   assert.equal(postgres.released, 0);
-  assert.deepEqual(progress, ["embedding-model", "vector-database", "registry-commit", "complete"]);
+  assert.deepEqual(progress, [
+    "embedding-model:start",
+    "embedding-model:success",
+    "vector-database:start",
+    "vector-database:success",
+    "registry-commit:start",
+    "registry-commit:success",
+    "complete:success",
+  ]);
   controlPlane.close();
 });
 

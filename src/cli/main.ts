@@ -285,7 +285,10 @@ export function createCli(): Command {
           throw new ConfigurationError("--database-url-env is valid only with existing-postgres");
         }
         const provisioner = new SystemProvisioner(controlPlane, {
-          onProgress: (_step, message) => process.stderr.write(`${message}\n`),
+          onProgress: (_step, message, state) => {
+            const icon = state === "start" ? "…" : state === "success" ? "✓" : "✗";
+            process.stderr.write(`${icon} ${message}\n`);
+          },
         });
         output(await provisioner.create({
           name: options.name,

@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import Database from "better-sqlite3";
-
 import {
   ConfigurationError,
   MirrorConfigurationCycleError,
@@ -18,6 +16,23 @@ import {
 } from "../../src/core/index.js";
 
 const temporaryDirectories: string[] = [];
+
+interface RawDatabase {
+  close(): void;
+  exec(sql: string): unknown;
+  prepare(sql: string): { get(): unknown };
+}
+
+async function openRawDatabase(path: string, readonly = false): Promise<RawDatabase> {
+  const moduleName = (globalThis as { Bun?: unknown }).Bun === undefined ? "better-sqlite3" : "bun:sqlite";
+  const loaded = await import(moduleName) as {
+    default?: new(path: string, options?: { readonly?: boolean }) => RawDatabase;
+    Database?: new(path: string, options?: { readonly?: boolean }) => RawDatabase;
+  };
+  const Database = loaded.default ?? loaded.Database;
+  if (Database === undefined) throw new Error(`Missing database constructor from ${moduleName}`);
+  return readonly ? new Database(path, { readonly: true }) : new Database(path);
+}
 
 after(async () => {
   await Promise.all(temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })));
@@ -213,7 +228,7 @@ test("converts global records into runtime config without environment-backed man
   assert.equal(resolveConfiguredEnvironment(config, {}).databaseUrls.get("managed:local"), database.connectionUrl);
   frag.close();
 
-  const sqlite = new Database(registryPath, { readonly: true });
+  const sqlite = await openRawDatabase(registryPath, true);
   assert.equal((sqlite.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
   sqlite.close();
 });
@@ -249,7 +264,7 @@ test("migrates a v1 registry transactionally on open", async () => {
   const registryPath = join(directory, "registry.sqlite3");
   const initial = await openFrag({ registryPath });
   initial.close();
-  const old = new Database(registryPath);
+  const old = await openRawDatabase(registryPath);
   old.exec("ALTER TABLE embedders DROP COLUMN request_model; PRAGMA user_version = 1;");
   old.close();
 

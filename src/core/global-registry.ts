@@ -3,8 +3,6 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import Database, { type Statement } from "better-sqlite3";
-
 import { ConfigurationError, MirrorConfigurationCycleError } from "./errors.js";
 import type { ApiStyle, TokenCounterKind } from "./types.js";
 
@@ -184,6 +182,42 @@ export function resolveRegistryPath(options: OpenFragOptions = {}): string {
 }
 
 type SqlRow = Record<string, string | number | bigint | null | Uint8Array>;
+type SqlValue = string | number | bigint | null | Uint8Array;
+
+interface SqlRunResult {
+  readonly changes: number;
+}
+
+interface SqlStatement {
+  all(...values: SqlValue[]): unknown[];
+  get(...values: SqlValue[]): unknown;
+  run(...values: SqlValue[]): SqlRunResult;
+}
+
+interface SqlDatabase {
+  close(): void;
+  exec(sql: string): unknown;
+  prepare(sql: string): SqlStatement;
+}
+
+interface SqlDatabaseConstructor {
+  new(path: string): SqlDatabase;
+}
+
+async function sqliteConstructor(): Promise<SqlDatabaseConstructor> {
+  const runtimeModule = (globalThis as { Bun?: unknown }).Bun === undefined
+    ? "better-sqlite3"
+    : "bun:sqlite";
+  const loaded = await import(runtimeModule) as {
+    readonly default?: SqlDatabaseConstructor;
+    readonly Database?: SqlDatabaseConstructor;
+  };
+  const constructor = loaded.default ?? loaded.Database;
+  if (constructor === undefined) throw new Error(`SQLite driver ${runtimeModule} did not export a database constructor`);
+  return constructor;
+}
+
+const RuntimeSqlDatabase = await sqliteConstructor();
 
 function stringColumn(row: SqlRow, name: string): string {
   const value = row[name];
@@ -204,11 +238,11 @@ function numberColumn(row: SqlRow, name: string): number {
   return value;
 }
 
-function rows(statement: Statement, ...values: (string | number | null)[]): SqlRow[] {
+function rows(statement: SqlStatement, ...values: (string | number | null)[]): SqlRow[] {
   return statement.all(...values) as SqlRow[];
 }
 
-function migrate(database: Database.Database): void {
+function migrate(database: SqlDatabase): void {
   const current = numberColumn(database.prepare("PRAGMA user_version").get() as SqlRow, "user_version");
   if (current > SCHEMA_VERSION) {
     throw new ConfigurationError(
@@ -288,7 +322,7 @@ function migrate(database: Database.Database): void {
   }
 }
 
-function runTransaction<T>(database: Database.Database, operation: () => T): T {
+function runTransaction<T>(database: SqlDatabase, operation: () => T): T {
   database.exec("BEGIN IMMEDIATE");
   try {
     const value = operation();
@@ -356,11 +390,11 @@ function databaseFromRow(row: SqlRow): DatabaseRecord {
 
 export class FragControlPlane {
   readonly path: string;
-  readonly #database: Database.Database;
+  readonly #database: SqlDatabase;
 
   constructor(path: string) {
     this.path = path;
-    this.#database = new Database(path);
+    this.#database = new RuntimeSqlDatabase(path);
     this.#database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     migrate(this.#database);
   }
@@ -369,8 +403,8 @@ export class FragControlPlane {
     list: (): EmbedderRecord[] =>
       rows(this.#database.prepare("SELECT * FROM embedders ORDER BY id")).map(embedderFromRow),
     get: (id: string): EmbedderRecord | null => {
-      const row = this.#database.prepare("SELECT * FROM embedders WHERE id = ?").get(id) as SqlRow | undefined;
-      return row === undefined ? null : embedderFromRow(row);
+      const row = this.#database.prepare("SELECT * FROM embedders WHERE id = ?").get(id) as SqlRow | null | undefined;
+      return row == null ? null : embedderFromRow(row);
     },
     register: (input: EmbedderRegistration): EmbedderRecord => runTransaction(this.#database, () => {
       this.#ensureEmbedder(input);
@@ -388,8 +422,8 @@ export class FragControlPlane {
     list: (): DatabaseRecord[] =>
       rows(this.#database.prepare("SELECT * FROM databases ORDER BY id")).map(databaseFromRow),
     get: (id: string): DatabaseRecord | null => {
-      const row = this.#database.prepare("SELECT * FROM databases WHERE id = ?").get(id) as SqlRow | undefined;
-      return row === undefined ? null : databaseFromRow(row);
+      const row = this.#database.prepare("SELECT * FROM databases WHERE id = ?").get(id) as SqlRow | null | undefined;
+      return row == null ? null : databaseFromRow(row);
     },
     register: (input: DatabaseRegistration): DatabaseRecord => runTransaction(this.#database, () => {
       this.#ensureDatabase(input);
@@ -410,8 +444,8 @@ export class FragControlPlane {
     get: (name: string): SystemRecord | null => {
       const row = this.#database.prepare(
         "SELECT * FROM systems WHERE name = ? AND status = 'ready'",
-      ).get(name) as SqlRow | undefined;
-      return row === undefined ? null : this.#systemFromRow(row);
+      ).get(name) as SqlRow | null | undefined;
+      return row == null ? null : this.#systemFromRow(row);
     },
     create: (input: SystemCreateInput): SystemRecord => runTransaction(this.#database, () => {
       const name = nonEmpty(input.name, "system.name");
@@ -514,8 +548,8 @@ export class FragControlPlane {
     remove: (name: string): void => runTransaction(this.#database, () => {
       const inbound = this.#database.prepare(
         "SELECT source_system FROM system_mirrors WHERE target_system = ? ORDER BY source_system LIMIT 1",
-      ).get(name) as SqlRow | undefined;
-      if (inbound !== undefined) {
+      ).get(name) as SqlRow | null | undefined;
+      if (inbound != null) {
         throw new ConfigurationError(
           `Cannot remove system ${name}; it is mirrored by ${stringColumn(inbound, "source_system")}`,
         );
@@ -530,8 +564,8 @@ export class FragControlPlane {
 
   readonly settings = {
     get: (key: string): string | null => {
-      const row = this.#database.prepare("SELECT value FROM settings WHERE key = ?").get(key) as SqlRow | undefined;
-      return row === undefined ? null : stringColumn(row, "value");
+      const row = this.#database.prepare("SELECT value FROM settings WHERE key = ?").get(key) as SqlRow | null | undefined;
+      return row == null ? null : stringColumn(row, "value");
     },
     setDefaultSystem: (name: string | null): void => runTransaction(this.#database, () => {
       if (name === null) {

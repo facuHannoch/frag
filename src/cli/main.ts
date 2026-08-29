@@ -19,10 +19,7 @@ import {
 import { listenHttp } from "../server/http.js";
 import { runMcpStdio } from "../server/mcp.js";
 import { runAddWizard } from "../tui/add.js";
-
-function output(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
+import { renderOutput, type HumanRenderer } from "./output.js";
 
 function collectionsOption(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -89,7 +86,18 @@ export function createCli(): Command {
   program
     .name("frag")
     .description("Retrieval-augmented storage and search")
-    .version("0.1.0");
+    .version("0.1.0")
+    .addOption(new Option("--json", "always emit JSON output").conflicts("plain"))
+    .addOption(new Option("--plain", "emit readable text without interactive controls").conflicts("json"));
+
+  const output = <T>(value: T, humanRenderer?: HumanRenderer<T>): void => {
+    const options = program.opts<{ json?: boolean; plain?: boolean }>();
+    process.stdout.write(renderOutput(value, {
+      json: options.json === true,
+      plain: options.plain === true,
+      isTTY: process.stdout.isTTY === true,
+    }, humanRenderer));
+  };
 
   program
     .command("put")

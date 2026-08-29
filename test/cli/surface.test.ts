@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { createCli, isMainModule } from "../../src/cli/main.js";
+import { renderOutput, usesHumanOutput } from "../../src/cli/output.js";
 
 test("normal CLI has no config path and add exposes semantic provisioning flags", () => {
   const cli = createCli();
@@ -19,6 +20,23 @@ test("normal CLI has no config path and add exposes semantic provisioning flags"
   assert.ok(flags.includes("--mirror"));
   assert.equal(flags.includes("--embedder"), false);
   assert.equal(flags.includes("--db"), false);
+  assert.ok(cli.options.some((option) => option.long === "--json"));
+  assert.ok(cli.options.some((option) => option.long === "--plain"));
+});
+
+test("uses readable output only for terminals or an explicit plain request", () => {
+  assert.equal(usesHumanOutput({ json: false, plain: false, isTTY: true }), true);
+  assert.equal(usesHumanOutput({ json: false, plain: false, isTTY: false }), false);
+  assert.equal(usesHumanOutput({ json: false, plain: true, isTTY: false }), true);
+  assert.equal(usesHumanOutput({ json: true, plain: true, isTTY: true }), false);
+  assert.equal(
+    renderOutput({ value: 1 }, { json: false, plain: true, isTTY: false }, () => "Readable"),
+    "Readable\n",
+  );
+  assert.equal(
+    renderOutput({ value: 1 }, { json: true, plain: false, isTTY: true }, () => "Readable"),
+    '{\n  "value": 1\n}\n',
+  );
 });
 
 test("recognizes an installed symlink as the CLI main module", async () => {

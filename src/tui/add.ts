@@ -32,6 +32,29 @@ interface Keypress {
   readonly sequence?: string;
 }
 
+function characterWidth(character: string): number {
+  if (/\p{Mark}/u.test(character)) return 0;
+  return /[\u{1100}-\u{115f}\u{2329}-\u{232a}\u{2e80}-\u{a4cf}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1faff}]/u.test(character)
+    ? 2
+    : 1;
+}
+
+export function fitTerminalLine(text: string, columns: number): string {
+  const limit = Math.max(1, columns - 1);
+  const characters = [...text];
+  const total = characters.reduce((width, character) => width + characterWidth(character), 0);
+  if (total <= limit) return text;
+  let width = 0;
+  let result = "";
+  for (const character of characters) {
+    const next = characterWidth(character);
+    if (width + next > Math.max(0, limit - 1)) break;
+    result += character;
+    width += next;
+  }
+  return `${result}…`;
+}
+
 export class TerminalWizardPrompter implements WizardPrompter {
   async activity<T>(message: string, operation: () => Promise<T>): Promise<T> {
     if (!process.stdout.isTTY) {
@@ -79,18 +102,20 @@ export class TerminalWizardPrompter implements WizardPrompter {
     const render = (): void => {
       const visible = filtered();
       selected = Math.min(selected, Math.max(0, visible.length - 1));
-      if (renderedLines > 0) process.stdout.write(`\x1b[${renderedLines}F`);
-      const lines = [
-        `\x1b[2K${message}`,
-        `\x1b[2KSearch: ${query}`,
+      if (renderedLines > 0) process.stdout.write(`\x1b[${renderedLines}F\x1b[J`);
+      const rawLines = [
+        message,
+        `Search: ${query}`,
         ...(visible.length === 0
-          ? ["\x1b[2K  No matches"]
+          ? ["  No matches"]
           : visible.slice(0, 10).map((choice, index) => {
               const marker = index === selected ? ">" : " ";
               const disabled = choice.disabled === true ? " (unavailable)" : "";
-              return `\x1b[2K  ${marker} ${choice.label}${disabled}${choice.detail === undefined ? "" : ` — ${choice.detail}`}`;
+              return `  ${marker} ${choice.label}${disabled}${choice.detail === undefined ? "" : ` — ${choice.detail}`}`;
             })),
       ];
+      const columns = process.stdout.columns ?? 80;
+      const lines = rawLines.map((line) => `\x1b[2K${fitTerminalLine(line, columns)}`);
       process.stdout.write(`${lines.join("\n")}\n`);
       renderedLines = lines.length;
     };

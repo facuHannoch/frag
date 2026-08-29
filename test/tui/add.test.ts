@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fitTerminalLine,
   runAddWizard,
   type SelectChoice,
   type WizardPrompter,
@@ -50,6 +51,12 @@ class ScriptedPrompter implements WizardPrompter {
     this.notes.push(message);
   }
 }
+
+test("fits selector rows within terminal width so cursor redraws do not duplicate", () => {
+  assert.equal(fitTerminalLine("short", 20), "short");
+  assert.equal(fitTerminalLine("a very long selector result", 12), "a very lon…");
+  assert.equal(fitTerminalLine("界界界界界界", 8), "界界界…");
+});
 
 test("runs the requested three-step discovery-driven add flow", async () => {
   const prompter = new ScriptedPrompter(["nomic", "managed-postgres", null], ["notes", "Working notes"]);

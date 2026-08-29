@@ -21,6 +21,7 @@ export interface WizardPrompter {
   select<T>(message: string, choices: readonly SelectChoice<T>[]): Promise<T>;
   input(message: string, options?: { readonly defaultValue?: string }): Promise<string>;
   confirm(message: string, defaultValue?: boolean): Promise<boolean>;
+  activity<T>(message: string, operation: () => Promise<T>): Promise<T>;
   progress(step: ProvisioningStep, message: string): void;
   note(message: string): void;
 }
@@ -32,6 +33,30 @@ interface Keypress {
 }
 
 export class TerminalWizardPrompter implements WizardPrompter {
+  async activity<T>(message: string, operation: () => Promise<T>): Promise<T> {
+    if (!process.stdout.isTTY) {
+      process.stdout.write(`  … ${message}\n`);
+      return operation();
+    }
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let frame = 0;
+    const render = (): void => {
+      process.stdout.write(`\r\x1b[2K  ${frames[frame++ % frames.length]} ${message}`);
+    };
+    render();
+    const timer = setInterval(render, 80);
+    try {
+      const result = await operation();
+      clearInterval(timer);
+      process.stdout.write(`\r\x1b[2K  ✓ ${message}\n`);
+      return result;
+    } catch (error) {
+      clearInterval(timer);
+      process.stdout.write(`\r\x1b[2K  ✗ ${message}\n`);
+      throw error;
+    }
+  }
+
   async select<T>(message: string, choices: readonly SelectChoice<T>[]): Promise<T> {
     if (!process.stdin.isTTY || !process.stdout.isTTY || process.stdin.setRawMode === undefined) {
       throw new ConfigurationError("frag add needs an interactive terminal; use provisioning flags in scripts");
@@ -146,12 +171,16 @@ export async function runAddWizard(
   });
 
   prompter.note("Step 1 of 3 — Embedding model");
-  const models = await provisioner.discoverEmbeddingModels();
+  const models = await prompter.activity(
+    "Asking LM Studio for downloaded embedding models…",
+    () => provisioner.discoverEmbeddingModels(),
+  );
   if (models.length === 0) {
     throw new ConfigurationError(
       "No downloaded LM Studio embedding models were found. Download one in LM Studio (or with lms get), then retry.",
     );
   }
+  prompter.note(`  Found ${models.length} downloaded embedding model${models.length === 1 ? "" : "s"}.`);
   const modelKey = await prompter.select(
     "Select embedding model:",
     models.map((model) => ({
@@ -162,7 +191,10 @@ export async function runAddWizard(
   );
 
   prompter.note("\nStep 2 of 3 — Vector database");
-  const runtimes = await provisioner.availableDatabaseRuntimes();
+  const runtimes = await prompter.activity(
+    "Checking whether Docker or Podman is available…",
+    () => provisioner.availableDatabaseRuntimes(),
+  );
   const databaseKind = await prompter.select<"managed-postgres" | "existing-postgres">("Database:", [
     {
       label: "Managed local PostgreSQL",

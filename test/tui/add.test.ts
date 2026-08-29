@@ -14,6 +14,7 @@ import type {
 
 class ScriptedPrompter implements WizardPrompter {
   readonly notes: string[] = [];
+  readonly activities: string[] = [];
   readonly selections: unknown[];
   readonly inputs: string[];
 
@@ -34,6 +35,11 @@ class ScriptedPrompter implements WizardPrompter {
 
   async confirm(): Promise<boolean> {
     return true;
+  }
+
+  async activity<T>(message: string, operation: () => Promise<T>): Promise<T> {
+    this.activities.push(message);
+    return operation();
   }
 
   progress(_step: ProvisioningStep, message: string): void {
@@ -82,6 +88,11 @@ test("runs the requested three-step discovery-driven add flow", async () => {
     mirrors: [],
   });
   assert.ok(prompter.notes.some((note) => note.includes("Step 1 of 3 — Embedding model")));
+  assert.deepEqual(prompter.activities, [
+    "Asking LM Studio for downloaded embedding models…",
+    "Checking whether Docker or Podman is available…",
+  ]);
+  assert.ok(prompter.notes.some((note) => note.includes("Found 1 downloaded embedding model")));
   assert.ok(prompter.notes.some((note) => note.includes("Step 2 of 3 — Vector database")));
   assert.ok(prompter.notes.some((note) => note.includes("Step 3 of 3 — System configuration")));
   assert.ok(prompter.notes.some((note) => note.includes("frag put")));

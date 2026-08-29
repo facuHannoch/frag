@@ -2,6 +2,7 @@ export type FragErrorCode =
   | "CONFIGURATION_ERROR"
   | "UNKNOWN_COLLECTION"
   | "COLLECTION_NOT_ALLOWED"
+  | "COLLECTION_UNREACHABLE"
   | "DIMENSION_MISMATCH"
   | "CONCURRENT_MODIFICATION"
   | "SOURCE_KEY_CONFLICT"
@@ -49,6 +50,16 @@ export class CollectionNotAllowedError extends FragError {
     super("COLLECTION_NOT_ALLOWED", "Collection is not available in this process", {
       collection,
     });
+  }
+}
+
+export class CollectionUnreachableError extends FragError {
+  constructor(collection: string, reason: string) {
+    super(
+      "COLLECTION_UNREACHABLE",
+      `Collection ${collection} is unreachable: ${reason}`,
+      { collection, reason },
+    );
   }
 }
 

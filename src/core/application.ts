@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { EstimateTokenCounter } from "./chunking.js";
 import { parseFragConfig, resolveConfiguredEnvironment } from "./config.js";
+import { CollectionUnreachableError } from "./errors.js";
 import { embeddingFingerprint } from "./hash.js";
 import type { FragControlPlane } from "./global-registry.js";
 import { IngestService } from "./ingest.js";
@@ -11,7 +12,7 @@ import { bootstrapSchema, acquireSourceLock } from "./postgres/sql.js";
 import { PostgresStateStore } from "./postgres/state-store.js";
 import { PostgresVectorStore } from "./postgres/vector-store.js";
 import { EndpointTokenCounter, OpenAICompatibleEmbedder, TiktokenCounter } from "./providers.js";
-import { FragRegistry, type CollectionRuntime } from "./registry.js";
+import { FragRegistry, type CollectionRuntime, type UnreachableCollection } from "./registry.js";
 import { ReindexService } from "./reindex.js";
 import { SearchService, type SearchLogger } from "./search.js";
 import { MirrorFanout, TransferService, type TransferEndpoint } from "./transfer.js";
@@ -28,17 +29,20 @@ export class FragApplication {
   readonly #endpoints: ReadonlyMap<string, TransferEndpoint>;
   readonly #reindex: ReadonlyMap<string, ReindexService>;
   readonly #databases: readonly PostgresDatabase[];
+  readonly #unreachable: ReadonlyMap<string, string>;
 
   constructor(input: {
     registry: FragRegistry;
     endpoints: ReadonlyMap<string, TransferEndpoint>;
     reindex: ReadonlyMap<string, ReindexService>;
     databases: readonly PostgresDatabase[];
+    unreachable?: ReadonlyMap<string, string>;
   }) {
     this.registry = input.registry;
     this.#endpoints = input.endpoints;
     this.#reindex = input.reindex;
     this.#databases = input.databases;
+    this.#unreachable = input.unreachable ?? new Map();
   }
 
   async listSources(collection: string): Promise<Source[]> {
@@ -47,7 +51,7 @@ export class FragApplication {
 
   async reindex(collection: string, dryRun = false): Promise<ReindexResult> {
     const service = this.#reindex.get(collection);
-    if (service === undefined) throw new RangeError(`Unknown collection: ${collection}`);
+    if (service === undefined) this.#unknown(collection);
     return service.reindex({ dryRun });
   }
 
@@ -80,8 +84,14 @@ export class FragApplication {
 
   #endpoint(collection: string): TransferEndpoint {
     const endpoint = this.#endpoints.get(collection);
-    if (endpoint === undefined) throw new RangeError(`Unknown collection: ${collection}`);
+    if (endpoint === undefined) this.#unknown(collection);
     return endpoint;
+  }
+
+  #unknown(collection: string): never {
+    const reason = this.#unreachable.get(collection);
+    if (reason !== undefined) throw new CollectionUnreachableError(collection, reason);
+    throw new RangeError(`Unknown collection: ${collection}`);
   }
 }
 
@@ -95,29 +105,86 @@ function tokenCounter(
   return new EndpointTokenCounter(baseUrl, apiKey);
 }
 
+function emptyConfig(): FragConfig {
+  return { dbs: new Map(), embedders: new Map(), collections: new Map() };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function createFragApplication(
   config: FragConfig,
   options: FragApplicationOptions = {},
 ): Promise<FragApplication> {
-  const resolved = resolveConfiguredEnvironment(config, options.environment ?? process.env);
-  const databases = new Map<string, PostgresDatabase>();
+  const environment = options.environment ?? process.env;
+
+  // Each database and embedder is resolved independently so that one
+  // unreachable dependency does not block every other collection: the
+  // affected collections are marked unreachable below instead of throwing.
+  const databaseErrors = new Map<string, string>();
+  const databaseUrls = new Map<string, string>();
   for (const database of config.dbs.values()) {
-    databases.set(database.name, new PostgresDatabase(resolved.databaseUrls.get(database.name)!));
+    try {
+      const resolved = resolveConfiguredEnvironment(
+        { ...emptyConfig(), dbs: new Map([[database.name, database]]) },
+        environment,
+      );
+      databaseUrls.set(database.name, resolved.databaseUrls.get(database.name)!);
+    } catch (error) {
+      databaseErrors.set(database.name, errorMessage(error));
+    }
+  }
+
+  const embedderErrors = new Map<string, string>();
+  const embedderBaseUrls = new Map<string, string>();
+  const embedderApiKeys = new Map<string, string | null>();
+  for (const embedder of config.embedders.values()) {
+    try {
+      const resolved = resolveConfiguredEnvironment(
+        { ...emptyConfig(), embedders: new Map([[embedder.name, embedder]]) },
+        environment,
+      );
+      embedderBaseUrls.set(embedder.name, resolved.embedderBaseUrls.get(embedder.name)!);
+      embedderApiKeys.set(embedder.name, resolved.embedderApiKeys.get(embedder.name)!);
+    } catch (error) {
+      embedderErrors.set(embedder.name, errorMessage(error));
+    }
+  }
+
+  const databases = new Map<string, PostgresDatabase>();
+  for (const [name, url] of databaseUrls) {
+    databases.set(name, new PostgresDatabase(url));
   }
   try {
     for (const database of config.dbs.values()) {
+      if (databaseErrors.has(database.name)) continue;
       const dimensions = [...config.collections.values()]
-        .filter((collection) => collection.db === database.name)
+        .filter(
+          (collection) =>
+            collection.db === database.name && !embedderErrors.has(collection.embedder),
+        )
         .map((collection) => config.embedders.get(collection.embedder)!.dim);
-      await bootstrapSchema(databases.get(database.name)!, dimensions);
+      if (dimensions.length === 0) continue;
+      try {
+        await bootstrapSchema(databases.get(database.name)!, dimensions);
+      } catch (error) {
+        databaseErrors.set(database.name, errorMessage(error));
+      }
     }
 
     const endpoints = new Map<string, TransferEndpoint>();
+    const unreachable: UnreachableCollection[] = [];
     for (const collection of config.collections.values()) {
+      const reason = databaseErrors.get(collection.db) ?? embedderErrors.get(collection.embedder);
+      if (reason !== undefined) {
+        unreachable.push({ config: collection, reason });
+        continue;
+      }
       const embedderConfig = config.embedders.get(collection.embedder)!;
       const database = databases.get(collection.db)!;
-      const baseUrl = resolved.embedderBaseUrls.get(embedderConfig.name)!;
-      const apiKey = resolved.embedderApiKeys.get(embedderConfig.name)!;
+      const baseUrl = embedderBaseUrls.get(embedderConfig.name)!;
+      const apiKey = embedderApiKeys.get(embedderConfig.name)!;
       endpoints.set(collection.name, {
         collection,
         embedderConfig,
@@ -169,18 +236,19 @@ export async function createFragApplication(
         }),
       );
     }
-    const registry = new FragRegistry(
-      runtimes,
-      options.allowedCollections === undefined
+    const registry = new FragRegistry(runtimes, {
+      ...(options.allowedCollections === undefined
         ? {}
-        : { allowedCollections: options.allowedCollections },
-    );
+        : { allowedCollections: options.allowedCollections }),
+      unreachable,
+    });
     await registry.inspectCollections();
     return new FragApplication({
       registry,
       endpoints,
       reindex,
       databases: [...databases.values()],
+      unreachable: new Map(unreachable.map(({ config: c, reason }) => [c.name, reason])),
     });
   } catch (error) {
     await Promise.all([...databases.values()].map((database) => database.close()));

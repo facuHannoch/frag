@@ -402,6 +402,9 @@ export function isMainModule(
 if (isMainModule()) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    if (error instanceof Error && error.cause instanceof Error) {
+      process.stderr.write(`Caused by: ${error.cause.message}\n`);
+    }
     process.exitCode = 1;
   });
 }

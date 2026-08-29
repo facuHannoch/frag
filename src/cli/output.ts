@@ -20,7 +20,11 @@ export function renderOutput<T>(
     const rendered = humanRenderer(value);
     return rendered.endsWith("\n") ? rendered : `${rendered}\n`;
   }
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return `${JSON.stringify(value, jsonReplacer, 2)}\n`;
+}
+
+function jsonReplacer(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
 }
 
 function indentContent(content: string): string {

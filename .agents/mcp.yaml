@@ -20,4 +20,9 @@
 #     command: npx
 #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
 
-servers: {}
+servers:
+  frag:
+    type: stdio
+    command: /home/ffacu/.bun/bin/bun
+    args: ["/home/ffacu/q/apps/systems/frag/src/cli/main.ts", "mcp"]
+

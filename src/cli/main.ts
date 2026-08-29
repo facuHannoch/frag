@@ -19,7 +19,12 @@ import {
 import { listenHttp } from "../server/http.js";
 import { runMcpStdio } from "../server/mcp.js";
 import { runAddWizard } from "../tui/add.js";
-import { renderOutput, type HumanRenderer } from "./output.js";
+import {
+  renderOutput,
+  renderSearchResults,
+  renderSystemList,
+  type HumanRenderer,
+} from "./output.js";
 
 function collectionsOption(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -148,7 +153,8 @@ export function createCli(): Command {
         const collection = resolveSystem(controlPlane, second === undefined ? undefined : first);
         const query = second ?? first;
         if (query === undefined) throw new Error("Query is required");
-        output(await application.registry.search(collection, query, { limit: options.k as number }));
+        const response = await application.registry.search(collection, query, { limit: options.k as number });
+        output(response, (value) => renderSearchResults(value, collection));
       });
     });
 
@@ -189,7 +195,9 @@ export function createCli(): Command {
   program.command("list").action(async () => {
     const controlPlane = await openFrag();
     try {
-      output(controlPlane.systems.list());
+      const systems = controlPlane.systems.list();
+      const defaultSystem = controlPlane.settings.getDefaultSystem();
+      output(systems, (value) => renderSystemList(value, defaultSystem));
     } finally {
       controlPlane.close();
     }

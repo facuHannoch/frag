@@ -168,7 +168,7 @@ export class PostgresProvisioner {
       }
       const port = await this.#mappedPort(runtime);
       const connectionUrl = managedConnectionUrl(port, password);
-      await this.#verify(connectionUrl, dimension);
+      await this.#verify(connectionUrl, dimension, this.#readinessAttempts);
       return {
         registration: {
           id: MANAGED_DATABASE_ID,
@@ -211,7 +211,7 @@ export class PostgresProvisioner {
     if (connectionUrl === undefined || connectionUrl.length === 0) {
       throw new ConfigurationError(`Environment variable ${input.urlEnv} is not set`);
     }
-    await this.#verify(connectionUrl, input.dimension);
+    await this.#verify(connectionUrl, input.dimension, 1);
     return {
       id: input.id,
       kind: "existing-postgres",
@@ -294,19 +294,19 @@ export class PostgresProvisioner {
     return port;
   }
 
-  async #verify(connectionUrl: string, dimension: number): Promise<void> {
+  async #verify(connectionUrl: string, dimension: number, attempts: number): Promise<void> {
     const database = this.#databaseFactory(connectionUrl);
     try {
       let ready = false;
       let lastError: unknown;
-      for (let attempt = 0; attempt < this.#readinessAttempts; attempt += 1) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
           await database.query("SELECT 1 AS ready");
           ready = true;
           break;
         } catch (error) {
           lastError = error;
-          if (attempt + 1 < this.#readinessAttempts && this.#readinessDelayMs > 0) {
+          if (attempt + 1 < attempts && this.#readinessDelayMs > 0) {
             await new Promise<void>((resolve) => setTimeout(resolve, this.#readinessDelayMs));
           }
         }

@@ -36,10 +36,12 @@ export type ProvisioningStep =
   | "registry-commit"
   | "complete";
 
+export type ProvisioningProgressState = "start" | "success" | "failure";
+
 export interface SystemProvisionerOptions {
   readonly lmStudio?: LMStudioProvisioning;
   readonly postgres?: PostgresProvisioning;
-  readonly onProgress?: (step: ProvisioningStep, message: string) => void;
+  readonly onProgress?: (step: ProvisioningStep, message: string, state: ProvisioningProgressState) => void;
 }
 
 export interface PreparedSystem {
@@ -103,7 +105,7 @@ export class SystemProvisioner {
   readonly #controlPlane: FragControlPlane;
   readonly #lmStudio: LMStudioProvisioning;
   readonly #postgres: PostgresProvisioning;
-  readonly #onProgress: (step: ProvisioningStep, message: string) => void;
+  readonly #onProgress: (step: ProvisioningStep, message: string, state: ProvisioningProgressState) => void;
 
   constructor(controlPlane: FragControlPlane, options: SystemProvisionerOptions = {}) {
     this.#controlPlane = controlPlane;
@@ -123,12 +125,14 @@ export class SystemProvisioner {
   async create(input: ProvisionSystemInput): Promise<SystemRecord> {
     const prepared = await this.prepare(input);
     try {
-      this.#onProgress("registry-commit", `Registering system ${input.name}`);
+      this.#onProgress("registry-commit", `Registering system ${input.name}…`, "start");
       const system = this.#controlPlane.systems.create(prepared.input);
       prepared.finish();
-      this.#onProgress("complete", `System ${input.name} is ready`);
+      this.#onProgress("registry-commit", `Registered system ${input.name}`, "success");
+      this.#onProgress("complete", `System ${input.name} is ready`, "success");
       return system;
     } catch (error) {
+      this.#onProgress("registry-commit", `Could not register system ${input.name}`, "failure");
       await prepared.release().catch((cleanupError) => {
         throw new ConfigurationError(
           `System ${input.name} was not registered and some provisioned resources need recovery`,
@@ -152,20 +156,40 @@ export class SystemProvisioner {
     let embedderReady: LMStudioReadyModel | undefined;
     let postgresReady: ManagedPostgresReady | undefined;
     try {
-      this.#onProgress("embedding-model", `Preparing ${input.lmStudioModelKey}`);
-      embedderReady = await this.#lmStudio.ensureReady(input.lmStudioModelKey);
-      this.#onProgress("vector-database", "Preparing PostgreSQL and pgvector");
-      const database = input.database.kind === "managed-postgres"
-        ? (postgresReady = await this.#postgres.ensureManaged(
-            embedderReady.dimension,
-            this.#controlPlane.databases.get("managed:local") ?? undefined,
-          )).registration
-        : await this.#postgres.verifyExisting({
-            id: input.database.id,
-            urlEnv: input.database.urlEnv,
-            dimension: embedderReady.dimension,
-            ...(input.database.environment === undefined ? {} : { environment: input.database.environment }),
-          });
+      this.#onProgress("embedding-model", `Checking LM Studio and loading ${input.lmStudioModelKey}…`, "start");
+      try {
+        embedderReady = await this.#lmStudio.ensureReady(input.lmStudioModelKey);
+        this.#onProgress(
+          "embedding-model",
+          `Embedding model is ready (${embedderReady.dimension} dimensions)`,
+          "success",
+        );
+      } catch (error) {
+        this.#onProgress("embedding-model", `Could not prepare ${input.lmStudioModelKey}`, "failure");
+        throw error;
+      }
+      const databaseMessage = input.database.kind === "managed-postgres"
+        ? "Starting managed PostgreSQL and checking pgvector…"
+        : "Connecting to existing PostgreSQL and checking pgvector…";
+      this.#onProgress("vector-database", databaseMessage, "start");
+      let database: SystemCreateInput["database"];
+      try {
+        database = input.database.kind === "managed-postgres"
+          ? (postgresReady = await this.#postgres.ensureManaged(
+              embedderReady.dimension,
+              this.#controlPlane.databases.get("managed:local") ?? undefined,
+            )).registration
+          : await this.#postgres.verifyExisting({
+              id: input.database.id,
+              urlEnv: input.database.urlEnv,
+              dimension: embedderReady.dimension,
+              ...(input.database.environment === undefined ? {} : { environment: input.database.environment }),
+            });
+        this.#onProgress("vector-database", "PostgreSQL and pgvector are ready", "success");
+      } catch (error) {
+        this.#onProgress("vector-database", "Could not prepare PostgreSQL and pgvector", "failure");
+        throw error;
+      }
       const registrationInput: SystemCreateInput = {
         name: input.name,
         description: input.description,

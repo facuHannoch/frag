@@ -9,6 +9,7 @@ import {
 } from "../../src/tui/index.js";
 import type {
   ProvisionSystemInput,
+  ProvisioningProgressState,
   ProvisioningStep,
   SystemRecord,
 } from "../../src/core/index.js";
@@ -43,7 +44,7 @@ class ScriptedPrompter implements WizardPrompter {
     return operation();
   }
 
-  progress(_step: ProvisioningStep, message: string): void {
+  progress(_step: ProvisioningStep, message: string, _state: ProvisioningProgressState): void {
     this.notes.push(message);
   }
 

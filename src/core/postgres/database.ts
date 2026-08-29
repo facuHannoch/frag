@@ -6,7 +6,9 @@ export class PostgresDatabase implements Queryable, Transactional {
   readonly #pool: Pool;
 
   constructor(config: PoolConfig | string) {
-    this.#pool = new Pool(typeof config === "string" ? { connectionString: config } : config);
+    this.#pool = new Pool(typeof config === "string"
+      ? { connectionString: config, connectionTimeoutMillis: 10_000, query_timeout: 30_000 }
+      : config);
   }
 
   async query<Row extends Record<string, unknown> = Record<string, unknown>>(

@@ -47,12 +47,21 @@ frag config recover       # clean up a journaled interrupted setup
 ```sh
 frag put local-notes "a short note" --source-key note-1
 frag search local-notes "what did I write?"
+frag search local-notes "what did I write?" --pick       # select and copy
+frag search local-notes "what did I write?" --copy 1     # copy top result
 frag sources local-notes
 frag reindex local-notes --dry-run
 frag promote --from local-notes --to cloud-main --source note-1
 frag serve --collections local-notes
 frag mcp --collections local-notes
 ```
+
+Interactive terminals receive readable `list` and `search` output. Pipes receive
+JSON automatically; `--json` forces JSON and `--plain` forces readable text.
+Search `--pick` opens a searchable result selector and copies the complete
+selected chunk. `--copy <rank>` copies directly without opening the selector.
+Clipboard support uses `pbcopy` on macOS, `clip.exe` on Windows, and `wl-copy`,
+`xclip`, or `xsel` on Linux.
 
 Only CLI `put` and `search` use the globally configured default system.
 Library, HTTP, and MCP calls always require an explicit collection.

@@ -19,6 +19,8 @@ import {
 import { listenHttp } from "../server/http.js";
 import { runMcpStdio } from "../server/mcp.js";
 import { runAddWizard } from "../tui/add.js";
+import { pickSearchResult } from "../tui/search.js";
+import { copyToClipboard } from "./clipboard.js";
 import {
   renderOutput,
   renderSearchResults,
@@ -148,13 +150,40 @@ export function createCli(): Command {
     .argument("[system]")
     .argument("[query]")
     .option("--k <number>", "result count", (value) => Number(value), 5)
+    .addOption(new Option("--pick", "select a result and copy its complete content").conflicts("copy"))
+    .addOption(new Option("--copy <rank>", "copy a result by its one-based rank").argParser((value) => Number(value)).conflicts("pick"))
     .action(async (first: string | undefined, second: string | undefined, options) => {
+      const globalOptions = program.opts<{ json?: boolean; plain?: boolean }>();
+      if (options.pick === true && (process.stdin.isTTY !== true || process.stdout.isTTY !== true)) {
+        throw new ConfigurationError("--pick requires an interactive terminal; use --copy <rank> instead");
+      }
+      if (options.pick === true && (globalOptions.json === true || globalOptions.plain === true)) {
+        throw new ConfigurationError("--pick cannot be combined with --json or --plain");
+      }
       await withApplication(undefined, async (application, controlPlane) => {
         const collection = resolveSystem(controlPlane, second === undefined ? undefined : first);
         const query = second ?? first;
         if (query === undefined) throw new Error("Query is required");
         const response = await application.registry.search(collection, query, { limit: options.k as number });
         output(response, (value) => renderSearchResults(value, collection));
+        let copiedRank: number | undefined;
+        if (options.pick === true) {
+          if (response.results.length === 0) return;
+          const selected = await pickSearchResult(response.results);
+          copiedRank = response.results.indexOf(selected) + 1;
+          await copyToClipboard(selected.content);
+        } else if (options.copy !== undefined) {
+          const rank = options.copy as number;
+          if (response.results.length === 0) {
+            throw new ConfigurationError("Cannot copy a result because the search returned no results");
+          }
+          if (!Number.isSafeInteger(rank) || rank <= 0 || rank > response.results.length) {
+            throw new ConfigurationError(`--copy must be between 1 and ${response.results.length}`);
+          }
+          await copyToClipboard(response.results[rank - 1]!.content);
+          copiedRank = rank;
+        }
+        if (copiedRank !== undefined) process.stderr.write(`Copied result ${copiedRank} to the clipboard.\n`);
       });
     });
 

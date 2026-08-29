@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { createCli, isMainModule } from "../../src/cli/main.js";
+import { clipboardCommands, copyToClipboard, type ClipboardRunner } from "../../src/cli/clipboard.js";
 import {
   renderOutput,
   renderSearchResults,
@@ -13,6 +14,7 @@ import {
   usesHumanOutput,
 } from "../../src/cli/output.js";
 import type { SystemRecord } from "../../src/core/index.js";
+import { searchResultChoices } from "../../src/tui/search.js";
 
 test("normal CLI has no config path and add exposes semantic provisioning flags", () => {
   const cli = createCli();
@@ -28,6 +30,40 @@ test("normal CLI has no config path and add exposes semantic provisioning flags"
   assert.equal(flags.includes("--db"), false);
   assert.ok(cli.options.some((option) => option.long === "--json"));
   assert.ok(cli.options.some((option) => option.long === "--plain"));
+  const search = cli.commands.find((command) => command.name() === "search");
+  assert.ok(search?.options.some((option) => option.long === "--pick"));
+  assert.ok(search?.options.some((option) => option.long === "--copy"));
+});
+
+test("builds compact picker choices while retaining the complete result value", () => {
+  const result = {
+    sourceKey: "cars.md",
+    content: `Complete content ${"x".repeat(100)}`,
+    score: 0.5,
+    chunkIndex: 0,
+    chunkCount: 1,
+    metadata: {},
+  };
+  const [choice] = searchResultChoices([result]);
+  assert.equal(choice?.value, result);
+  assert.ok((choice?.detail?.length ?? 0) < result.content.length);
+});
+
+test("copies exact content using native clipboard candidates with fallback", async () => {
+  const calls: string[] = [];
+  const runner: ClipboardRunner = {
+    async run(command, args, content) {
+      calls.push(`${command} ${args.join(" ")} ${content}`);
+      return command === "xclip";
+    },
+  };
+  await copyToClipboard("all\ncontent", { platform: "linux", runner });
+  assert.deepEqual(calls, [
+    "wl-copy  all\ncontent",
+    "xclip -selection clipboard all\ncontent",
+  ]);
+  assert.deepEqual(clipboardCommands("darwin"), [{ command: "pbcopy", args: [] }]);
+  assert.deepEqual(clipboardCommands("win32"), [{ command: "clip.exe", args: [] }]);
 });
 
 test("uses readable output only for terminals or an explicit plain request", () => {
